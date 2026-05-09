@@ -1060,6 +1060,76 @@ Rules:
   };
 }
 
+function slugPart(value, fallback = "ghost-fix") {
+  const slug = String(value || fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 42);
+  return slug || fallback;
+}
+
+function buildCodexPatch(test, body = {}) {
+  const repoUrl = String(body.repoUrl || process.env.IGHOST_REPO_URL || "https://github.com/Jo2234/iGhost").trim();
+  const ghost = test.ghosts?.[0] || {};
+  const advice = test.actionableAdvice || {};
+  const adviceItems = Array.isArray(advice.items) ? advice.items.slice(0, 3) : [];
+  const steps = Array.isArray(test.sessionSteps) ? test.sessionSteps.slice(0, 8) : [];
+  const title = adviceItems[0]?.title || advice.summary || `Improve ${test.productName || "the product"} after ghost walkthrough`;
+  const branchName = `codex/${slugPart(test.productName || "product")}-${slugPart(title)}`;
+  const evidence = steps.length
+    ? steps.map((step, index) => `${index + 1}. ${step.actionLabel || step.action || "Observed screen"}: ${step.thought}`).join("\n")
+    : "Use the generated walkthrough video and actionable advice as the source of truth.";
+  const recommendations = adviceItems.length
+    ? adviceItems.map((item, index) => `${index + 1}. ${item.title}\n   Why: ${item.why}\n   Change: ${item.change}`).join("\n")
+    : "No actionable advice was generated. Inspect the walkthrough and propose the smallest product change that helps the user complete the task.";
+  const prompt = `You are Codex working on a product improvement from an iGhost usability walkthrough.
+
+Repository: ${repoUrl}
+Suggested branch: ${branchName}
+Do not push directly to main. Create a branch, make the smallest useful change, run checks, commit, push the branch, and open a PR if GitHub access is available.
+
+Product under test: ${test.productName || "Unknown product"}
+Website: ${test.websiteUrl || "No website URL recorded"}
+Ghost: ${ghost.name || "Ghost"}${ghost.archetype ? `, ${ghost.archetype}` : ""}
+Ghost profile: ${test.customGhost?.profile || test.ghostProfile || "Default iGhost persona"}
+Original user task: ${test.intendedTask}
+
+Main finding:
+${advice.summary || "The walkthrough found friction while the ghost tried to complete the task."}
+
+Actionable recommendations:
+${recommendations}
+
+Evidence from the walkthrough:
+${evidence}
+
+Implementation guidance:
+- Inspect the existing codebase before editing.
+- Prefer the current design system and local patterns.
+- Keep the change tightly scoped to the recommendation above.
+- If the finding is about clarity, pricing, trust, navigation, or CTA visibility, improve the relevant UI/content rather than adding a generic explanation.
+- Add or update tests/checks only where the repo already supports them or where the behavior is risky.
+- Report the changed files, checks run, commit hash, pushed branch, and PR URL if created.`;
+
+  return {
+    id: id("patch"),
+    testId: test.id,
+    status: "ready",
+    repoUrl,
+    branchName,
+    title,
+    summary: advice.summary || "Codex patch request generated from ghost findings.",
+    prompt,
+    safetyNotes: [
+      "Review the patch before merging.",
+      "Do not include private screenshots, API keys, or local data in the PR.",
+      "Push to a feature branch, not directly to main.",
+    ],
+    createdAt: new Date().toISOString(),
+  };
+}
+
 async function answerGhostQuestion(test, body) {
   requireOpenAiKey();
   const ghost = test.ghosts?.find((item) => item.id === body.ghostId) || test.ghosts?.[0];
@@ -1318,6 +1388,22 @@ async function handleApi(req, res, pathname) {
     } catch (error) {
       return send(res, 502, { error: error.message });
     }
+  }
+
+  const patchMatch = pathname.match(/^\/api\/tests\/([^/]+)\/codex-patch$/);
+  if (req.method === "POST" && patchMatch) {
+    const body = await parseJson(req);
+    const db = await loadDb();
+    const test = db.tests[patchMatch[1]];
+    if (!test) return send(res, 404, { error: "Test not found" });
+    if (test.status !== "complete") {
+      return send(res, 409, { error: "Run the ghost walkthrough before requesting a Codex patch." });
+    }
+    const codexPatch = buildCodexPatch(test, body);
+    test.codexPatch = codexPatch;
+    test.updatedAt = new Date().toISOString();
+    await saveDb(db);
+    return send(res, 200, { codexPatch, test });
   }
 
   const testMatch = pathname.match(/^\/api\/tests\/([^/]+)$/);

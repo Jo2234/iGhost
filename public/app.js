@@ -183,6 +183,32 @@ function advice(test) {
   return test.actionableAdvice?.items?.length ? test.actionableAdvice : null;
 }
 
+function codexPatchMarkup(test) {
+  const patch = test.codexPatch;
+  const prompt = patch?.prompt || "";
+  return `
+    <section class="codex-panel">
+      <div>
+        <p class="eyebrow">Codex patch</p>
+        <h2>Turn this walkthrough into a branch.</h2>
+        <p>Generate a scoped Codex request from the ghost's findings, then use it to create a patch without pushing straight to main.</p>
+      </div>
+      <div class="codex-actions">
+        <button class="button primary" id="codex-request" type="button">${prompt ? "Regenerate request" : "Generate Codex request"}</button>
+        <button class="button ${prompt ? "" : "hidden"}" id="codex-copy" type="button">Copy prompt</button>
+      </div>
+      <div class="status hidden" id="codex-status"></div>
+      <div class="codex-result ${prompt ? "" : "hidden"}" id="codex-result">
+        <div class="codex-meta">
+          <span>${escapeHtml(patch?.branchName || "codex/ghost-fix")}</span>
+          <span>${escapeHtml(patch?.repoUrl || "GitHub repo")}</span>
+        </div>
+        <textarea class="codex-prompt" id="codex-prompt" readonly>${escapeHtml(prompt)}</textarea>
+      </div>
+    </section>
+  `;
+}
+
 function output(test) {
   const hasVideo = Boolean(test.videoUrl);
   const recommendation = advice(test);
@@ -220,8 +246,46 @@ function output(test) {
           </div>
         </section>
       ` : ""}
+      ${recommendation ? codexPatchMarkup(test) : ""}
     </section>
   `);
+  bindCodexPatch(test);
+}
+
+function setCodexStatus(message, isError = false) {
+  const status = app.querySelector("#codex-status");
+  if (!status) return;
+  status.className = `status${isError ? " error" : ""}`;
+  status.textContent = message;
+}
+
+function bindCodexPatch(test) {
+  const request = app.querySelector("#codex-request");
+  const copy = app.querySelector("#codex-copy");
+  if (!request) return;
+  request.addEventListener("click", async () => {
+    request.disabled = true;
+    setCodexStatus("Preparing a Codex-ready patch request...");
+    try {
+      const { test: updatedTest } = await api(`/api/tests/${test.id}/codex-patch`, { method: "POST", body: "{}" });
+      output(updatedTest);
+      setCodexStatus("Codex request ready.");
+    } catch (error) {
+      setCodexStatus(error.message, true);
+      request.disabled = false;
+    }
+  });
+  copy?.addEventListener("click", async () => {
+    const prompt = app.querySelector("#codex-prompt")?.value || "";
+    if (!prompt) return;
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCodexStatus("Copied. Paste this into Codex to create the patch branch.");
+    } catch {
+      app.querySelector("#codex-prompt")?.select();
+      setCodexStatus("Prompt selected. Copy it with your keyboard.");
+    }
+  });
 }
 
 function render() {
