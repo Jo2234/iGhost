@@ -563,6 +563,33 @@ function runCommand(command, args, timeout = 60000) {
   });
 }
 
+function runCommandCapture(command, args, timeout = 60000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`${path.basename(command)} timed out.`));
+    }, timeout);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error(stderr.trim() || `${path.basename(command)} failed with exit code ${code}.`));
+    });
+  });
+}
+
 async function commandWorks(command, args = ["-version"], timeout = 8000) {
   try {
     await runCommand(command, args, timeout);
@@ -1130,6 +1157,83 @@ Implementation guidance:
   };
 }
 
+function parseGitHubRepo(repoUrl) {
+  const value = String(repoUrl || "").trim();
+  const shorthand = value.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+  if (shorthand) return { owner: shorthand[1], repo: shorthand[2].replace(/\.git$/, "") };
+  const parsed = new URL(value);
+  if (parsed.hostname !== "github.com" && parsed.hostname !== "www.github.com") {
+    throw new Error("Codex issue delivery currently supports GitHub repository URLs only.");
+  }
+  const [owner, repo] = parsed.pathname.replace(/^\/+/, "").split("/");
+  if (!owner || !repo) throw new Error("GitHub repo URL must include an owner and repository name.");
+  return { owner, repo: repo.replace(/\.git$/, "") };
+}
+
+function codexIssueBody(test, patch) {
+  return `@codex Please implement this iGhost patch request.
+
+This issue was generated from an iGhost walkthrough. Please create a feature branch, make the smallest useful change, run available checks, and open a pull request. Do not push directly to main.
+
+## iGhost prompt
+
+\`\`\`text
+${patch.prompt}
+\`\`\`
+
+## Review notes
+
+- Generated from test: ${test.id}
+- Walkthrough video: ${test.videoUrl || "No video URL recorded"}
+- Review the patch before merging.
+- Do not include private screenshots, API keys, or local data in the PR.`;
+}
+
+async function githubToken() {
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+  if (process.env.IGHOST_GITHUB_TOKEN) return process.env.IGHOST_GITHUB_TOKEN;
+  try {
+    return await runCommandCapture("gh", ["auth", "token"], 8000);
+  } catch {
+    return "";
+  }
+}
+
+async function createCodexIssue(test, patch) {
+  const { owner, repo } = parseGitHubRepo(patch.repoUrl);
+  const token = await githubToken();
+  if (!token) {
+    throw new Error("GitHub is not authenticated. Sign in with `gh auth login` locally or set GITHUB_TOKEN on the server.");
+  }
+  const title = `[iGhost] ${patch.title || patch.summary || "Codex patch request"}`.slice(0, 240);
+  const body = codexIssueBody(test, patch);
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
+    method: "POST",
+    signal: AbortSignal.timeout(20000),
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "user-agent": "iGhost",
+      "x-github-api-version": "2022-11-28",
+    },
+    body: JSON.stringify({ title, body }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`GitHub issue creation failed: ${response.status} ${errorText}`);
+  }
+  const issue = await response.json();
+  return {
+    id: issue.id,
+    number: issue.number,
+    title: issue.title,
+    url: issue.html_url,
+    apiUrl: issue.url,
+    createdAt: issue.created_at,
+  };
+}
+
 async function answerGhostQuestion(test, body) {
   requireOpenAiKey();
   const ghost = test.ghosts?.find((item) => item.id === body.ghostId) || test.ghosts?.[0];
@@ -1404,6 +1508,43 @@ async function handleApi(req, res, pathname) {
     test.updatedAt = new Date().toISOString();
     await saveDb(db);
     return send(res, 200, { codexPatch, test });
+  }
+
+  const sendPatchMatch = pathname.match(/^\/api\/tests\/([^/]+)\/codex-patch\/send$/);
+  if (req.method === "POST" && sendPatchMatch) {
+    const body = await parseJson(req);
+    const db = await loadDb();
+    const test = db.tests[sendPatchMatch[1]];
+    if (!test) return send(res, 404, { error: "Test not found" });
+    if (test.status !== "complete") {
+      return send(res, 409, { error: "Run the ghost walkthrough before sending a Codex issue." });
+    }
+    const codexPatch = test.codexPatch?.prompt ? test.codexPatch : buildCodexPatch(test, body);
+    if (codexPatch.githubIssue?.url && !body.force) {
+      return send(res, 200, { codexPatch, githubIssue: codexPatch.githubIssue, test });
+    }
+    try {
+      const githubIssue = await createCodexIssue(test, codexPatch);
+      test.codexPatch = {
+        ...codexPatch,
+        status: "sent_to_codex",
+        githubIssue,
+        sentAt: new Date().toISOString(),
+      };
+      test.updatedAt = new Date().toISOString();
+      await saveDb(db);
+      return send(res, 200, { codexPatch: test.codexPatch, githubIssue, test });
+    } catch (error) {
+      test.codexPatch = {
+        ...codexPatch,
+        status: "send_failed",
+        sendError: error.message,
+        updatedAt: new Date().toISOString(),
+      };
+      test.updatedAt = new Date().toISOString();
+      await saveDb(db);
+      return send(res, 502, { error: error.message, codexPatch: test.codexPatch, test });
+    }
   }
 
   const testMatch = pathname.match(/^\/api\/tests\/([^/]+)$/);

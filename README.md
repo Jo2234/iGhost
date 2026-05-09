@@ -31,6 +31,7 @@ export OPENAI_TTS_MODEL="gpt-4o-mini-tts"
 - `/` - landing page
 - `/test/:testId` - generated MP4 walkthrough output
 - `/api/tests/:testId/codex-patch` - create a Codex-ready patch request from the ghost findings
+- `/api/tests/:testId/codex-patch/send` - create a GitHub issue that tags `@codex` with the patch request
 
 ## Website capture
 
@@ -62,3 +63,4 @@ Create a Blueprint from this GitHub repo in Render and provide `OPENAI_API_KEY` 
 - MP4 rendering uses a working local `ffmpeg`. If one is not available, the server installs a local `imageio-ffmpeg` encoder under `.vendor/`.
 - Voiceover is generated with OpenAI speech from a spoken monologue script, not from step labels.
 - Codex patch requests are generated from the AI walkthrough findings and are designed for branch/PR workflows, not direct pushes to `main`.
+- Sending a patch to Codex requires GitHub authentication. Locally, sign in with `gh auth login`; in production, set `GITHUB_TOKEN` or `IGHOST_GITHUB_TOKEN` with issue creation access.

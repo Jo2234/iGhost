@@ -186,22 +186,26 @@ function advice(test) {
 function codexPatchMarkup(test) {
   const patch = test.codexPatch;
   const prompt = patch?.prompt || "";
+  const issueUrl = patch?.githubIssue?.url || "";
   return `
     <section class="codex-panel">
       <div>
         <p class="eyebrow">Codex patch</p>
         <h2>Turn this walkthrough into a branch.</h2>
-        <p>Generate a scoped Codex request from the ghost's findings, then use it to create a patch without pushing straight to main.</p>
+        <p>Generate a scoped Codex request from the ghost's findings, then send it to GitHub as an @codex issue without pushing straight to main.</p>
       </div>
       <div class="codex-actions">
         <button class="button primary" id="codex-request" type="button">${prompt ? "Regenerate request" : "Generate Codex request"}</button>
         <button class="button ${prompt ? "" : "hidden"}" id="codex-copy" type="button">Copy prompt</button>
+        <button class="button ${prompt && !issueUrl ? "" : "hidden"}" id="codex-send" type="button">Send to Codex</button>
+        <a class="button ${issueUrl ? "" : "hidden"}" id="codex-issue" href="${escapeHtml(issueUrl)}" target="_blank" rel="noreferrer">View GitHub issue</a>
       </div>
       <div class="status hidden" id="codex-status"></div>
       <div class="codex-result ${prompt ? "" : "hidden"}" id="codex-result">
         <div class="codex-meta">
           <span>${escapeHtml(patch?.branchName || "codex/ghost-fix")}</span>
           <span>${escapeHtml(patch?.repoUrl || "GitHub repo")}</span>
+          ${issueUrl ? `<span>Issue #${escapeHtml(patch.githubIssue.number)}</span>` : ""}
         </div>
         <textarea class="codex-prompt" id="codex-prompt" readonly>${escapeHtml(prompt)}</textarea>
       </div>
@@ -262,6 +266,7 @@ function setCodexStatus(message, isError = false) {
 function bindCodexPatch(test) {
   const request = app.querySelector("#codex-request");
   const copy = app.querySelector("#codex-copy");
+  const send = app.querySelector("#codex-send");
   if (!request) return;
   request.addEventListener("click", async () => {
     request.disabled = true;
@@ -284,6 +289,18 @@ function bindCodexPatch(test) {
     } catch {
       app.querySelector("#codex-prompt")?.select();
       setCodexStatus("Prompt selected. Copy it with your keyboard.");
+    }
+  });
+  send?.addEventListener("click", async () => {
+    send.disabled = true;
+    setCodexStatus("Creating a GitHub issue and tagging @codex...");
+    try {
+      const { test: updatedTest, githubIssue } = await api(`/api/tests/${test.id}/codex-patch/send`, { method: "POST", body: "{}" });
+      output(updatedTest);
+      setCodexStatus(`Sent to Codex through GitHub issue #${githubIssue.number}.`);
+    } catch (error) {
+      setCodexStatus(error.message, true);
+      send.disabled = false;
     }
   });
 }
