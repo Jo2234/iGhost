@@ -1,9 +1,5 @@
 const app = document.querySelector("#app");
 
-const state = {
-  clientVideoUrl: "",
-};
-
 const ghosts = [
   {
     id: "impatient",
@@ -71,8 +67,13 @@ function landing() {
     <section class="mvp">
       <div class="intro">
         <p class="eyebrow">Ghost walkthrough</p>
-        <h1>Generate a voiceover video of an AI user trying your website.</h1>
-        <p>Paste a URL, choose a ghost, describe the task. iGhost opens the site, acts like that user, records what it sees and thinks, and gives you a downloadable walkthrough.</p>
+        <h1>Watch a ghost use your website.</h1>
+        <p>Paste a URL, describe the job, and get a playable MP4 with the ghost's voiceover and highlighted cursor.</p>
+        <div class="process">
+          <span><b>1</b> Add URL</span>
+          <span><b>2</b> Pick ghost</span>
+          <span><b>3</b> Get MP4</span>
+        </div>
       </div>
       <form class="run-card" id="run-form">
         <label>
@@ -143,173 +144,30 @@ function ghostName(test) {
   return test.ghosts?.[0]?.name || "Ghost";
 }
 
-function steps(test) {
-  return test.sessionSteps?.length ? test.sessionSteps : [];
-}
-
-function firstAudio(test) {
-  return test.walkthroughAudioUrl || test.reactions?.find((reaction) => reaction.audioUrl)?.audioUrl || "";
-}
-
 function output(test) {
-  const replaySteps = steps(test);
+  const hasVideo = Boolean(test.videoUrl);
   shell(`
     <section class="watch">
       <header class="watch-head">
         <div>
-          <p class="eyebrow">Walkthrough ready</p>
+          <p class="eyebrow">${hasVideo ? "Walkthrough ready" : "Walkthrough failed"}</p>
           <h1>${escapeHtml(ghostName(test))} used ${escapeHtml(test.productName || "your website")}</h1>
         </div>
         <button class="button" data-route="/">New walkthrough</button>
       </header>
       <section class="video-panel">
-        <div class="video-actions">
-          <button class="button primary" id="record-video">Generate video with voiceover</button>
-          <a class="button hidden" id="download-video" download="ighost-walkthrough.webm">Download video</a>
-        </div>
-        <canvas id="walkthrough-canvas" width="1280" height="720"></canvas>
-        ${firstAudio(test) ? `<audio class="voice-preview" controls src="${firstAudio(test)}"></audio>` : `<p class="status error">Voiceover was not generated.</p>`}
+        ${hasVideo ? `
+          <video class="walkthrough-video" controls playsinline preload="metadata" src="${test.videoUrl}"></video>
+          <div class="video-actions">
+            <a class="button" href="${test.videoUrl}" download="ighost-walkthrough.mp4">Download MP4</a>
+          </div>
+        ` : `
+          <p class="status error">${escapeHtml(test.videoError || "The MP4 was not generated.")}</p>
+        `}
       </section>
-      <section class="steps-list">
-        ${replaySteps.map((step, index) => `
-          <article>
-            <span>${index + 1}</span>
-            <p>${escapeHtml(step.thought || "The ghost is deciding what to do next.")}</p>
-            <small>${escapeHtml(step.actionLabel || step.action || "")}</small>
-          </article>
-        `).join("")}
-      </section>
+      ${test.walkthroughScript ? `<p class="transcript">${escapeHtml(test.walkthroughScript)}</p>` : ""}
     </section>
   `);
-  drawFrame(test, 0);
-  app.querySelector("#record-video")?.addEventListener("click", () => recordVideo(test));
-}
-
-async function image(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function wrap(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
-  const words = String(text || "").split(" ");
-  let line = "";
-  let count = 0;
-  for (const word of words) {
-    const test = `${line}${word} `;
-    if (ctx.measureText(test).width > maxWidth && line) {
-      ctx.fillText(line.trim(), x, y);
-      line = `${word} `;
-      y += lineHeight;
-      count += 1;
-      if (count >= maxLines) return;
-    } else {
-      line = test;
-    }
-  }
-  ctx.fillText(line.trim(), x, y);
-}
-
-async function drawFrame(test, ms = 0) {
-  const canvas = document.querySelector("#walkthrough-canvas");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const replaySteps = steps(test);
-  const index = Math.min(replaySteps.length - 1, Math.floor(ms / 4500));
-  const local = (ms % 4500) / 4500;
-  const current = replaySteps[index] || replaySteps[0] || {};
-  const next = replaySteps[index + 1] || current;
-  ctx.fillStyle = "#06040b";
-  ctx.fillRect(0, 0, 1280, 720);
-  if (current.screenshotUrl) {
-    const img = await image(current.screenshotUrl);
-    const scale = Math.min(1120 / img.width, 540 / img.height);
-    const w = img.width * scale;
-    const h = img.height * scale;
-    ctx.drawImage(img, 80 + (1120 - w) / 2, 28 + (540 - h) / 2, w, h);
-  }
-  const cx1 = (current.cursor?.x || 720) / 1440;
-  const cy1 = (current.cursor?.y || 520) / 1100;
-  const cx2 = (next.cursor?.x || current.cursor?.x || 820) / 1440;
-  const cy2 = (next.cursor?.y || current.cursor?.y || 560) / 1100;
-  const x = 80 + 1120 * (cx1 + (cx2 - cx1) * local);
-  const y = 28 + 540 * (cy1 + (cy2 - cy1) * local);
-  ctx.fillStyle = "rgba(255,255,255,.28)";
-  ctx.beginPath();
-  ctx.arc(x, y, 24, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#a78bfa";
-  ctx.beginPath();
-  ctx.arc(x, y, 8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "rgba(5,3,10,.9)";
-  roundRect(ctx, 54, 546, 1172, 126, 18);
-  ctx.fillStyle = "#efe8ff";
-  ctx.font = "700 28px Arial, sans-serif";
-  ctx.fillText(`${ghostName(test)} thinking aloud`, 82, 588);
-  ctx.fillStyle = "#fff";
-  ctx.font = "24px Arial, sans-serif";
-  wrap(ctx, current.thought || "I am deciding what to try next.", 82, 632, 1080, 31, 2);
-}
-
-async function audioStream(url) {
-  if (!url) return [];
-  const context = new AudioContext();
-  const response = await fetch(url);
-  const buffer = await context.decodeAudioData(await response.arrayBuffer());
-  const source = context.createBufferSource();
-  source.buffer = buffer;
-  const destination = context.createMediaStreamDestination();
-  source.connect(destination);
-  source.start();
-  return destination.stream.getAudioTracks();
-}
-
-async function recordVideo(test) {
-  const canvas = document.querySelector("#walkthrough-canvas");
-  const button = document.querySelector("#record-video");
-  const link = document.querySelector("#download-video");
-  if (!canvas || !window.MediaRecorder) return;
-  button.disabled = true;
-  button.textContent = "Generating...";
-  const tracks = [...canvas.captureStream(30).getVideoTracks(), ...(await audioStream(firstAudio(test)).catch(() => []))];
-  const recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: "video/webm" });
-  const chunks = [];
-  recorder.ondataavailable = (event) => {
-    if (event.data.size) chunks.push(event.data);
-  };
-  recorder.onstop = () => {
-    const blob = new Blob(chunks, { type: "video/webm" });
-    state.clientVideoUrl = URL.createObjectURL(blob);
-    link.href = state.clientVideoUrl;
-    link.classList.remove("hidden");
-    button.textContent = "Regenerate video";
-    button.disabled = false;
-  };
-  recorder.start();
-  const duration = Math.max(4500, steps(test).length * 4500);
-  const start = performance.now();
-  async function tick(now) {
-    const elapsed = now - start;
-    await drawFrame(test, elapsed);
-    if (elapsed < duration) requestAnimationFrame(tick);
-    else recorder.stop();
-  }
-  requestAnimationFrame(tick);
 }
 
 function render() {

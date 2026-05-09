@@ -1,6 +1,6 @@
 # iGhost
 
-iGhost is a dependency-free MVP of an AI-native usability lab. It lets a builder upload product-flow screenshots, describe the intended task, summon synthetic ghost users, watch rage-quit replays, review copy/layout fixes, see an annotated screenshot, copy a Codex-style patch, and open a public report.
+iGhost is a dependency-free MVP for generating ghost walkthrough videos. Paste a website URL, describe what the ghost should try, choose a personality, and iGhost opens the site, drives the browser, creates a natural OpenAI voiceover, and renders a playable MP4 with a highlighted cursor.
 
 ## Run
 
@@ -18,7 +18,7 @@ http://localhost:4173
 
 ## OpenAI configuration
 
-The app reads `.env` automatically at server startup and keeps all OpenAI calls on the server. If `OPENAI_API_KEY` is not set, the app still runs with deterministic demo output so the product can be judged end-to-end.
+The app reads `.env` automatically at server startup and keeps all OpenAI calls on the server. `OPENAI_API_KEY` is required for every walkthrough.
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -29,20 +29,15 @@ export OPENAI_TTS_MODEL="gpt-4o-mini-tts"
 ## Routes
 
 - `/` - landing page
-- `/new` - create a ghost test
-- `/test/:testId` - live session and results
-- `/report/:slug` - public report
+- `/test/:testId` - generated MP4 walkthrough output
 
 ## Website capture
 
-When a user enters a website URL, iGhost launches local headless Chrome/Brave/Edge/Chromium, captures a PNG screenshot at `1440x1100`, and passes that screenshot to OpenAI vision along with the task prompt. Uploaded screenshots are added after the website capture if both are provided.
+When a user enters a website URL, iGhost launches local headless Chrome/Brave/Edge/Chromium, captures screenshots while the ghost navigates, and passes those screenshots to OpenAI vision along with the task prompt.
 
 Set `CHROME_PATH` if the browser is not in a standard macOS app location.
 
 ## Notes
 
-- Public reports exclude pasted code context by default.
-- Voice clips are generated only when `OPENAI_API_KEY` is configured.
-- Voice playback is labeled as AI-generated in the interface.
-- The current replay is an interactive, video-like playback experience with synchronized screenshots, ghost state, transcript, and voice. It does not export an MP4 yet.
-- The fallback path is intentionally visible in the UI as `demo fallback`.
+- MP4 rendering uses a working local `ffmpeg`. If one is not available, the server installs a local `imageio-ffmpeg` encoder under `.vendor/`.
+- Voiceover is generated with OpenAI speech from a spoken monologue script, not from step labels.

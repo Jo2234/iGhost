@@ -1,5 +1,5 @@
 import http from "node:http";
-import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, rm, readdir } from "node:fs/promises";
 import { existsSync, createWriteStream } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -78,6 +78,10 @@ function requireOpenAiKey() {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is required. Add it to .env and restart the server.");
   }
+}
+
+function extractOutputText(json) {
+  return json.output_text || json.output?.flatMap((item) => item.content || []).map((part) => part.text || "").join("") || "";
 }
 
 function normalizeUrl(rawUrl) {
@@ -238,7 +242,7 @@ async function getClickableElements(cdp) {
       const rect = el.getBoundingClientRect();
       const style = getComputedStyle(el);
       const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || el.href || '').trim().replace(/\\s+/g, ' ');
-      return { index, tag: el.tagName.toLowerCase(), text, href: el.href || '', x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: rect.width > 4 && rect.height > 4 && style.visibility !== 'hidden' && style.display !== 'none' };
+      return { index, tag: el.tagName.toLowerCase(), text, href: el.href || '', x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: rect.width > 4 && rect.height > 4 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth && style.visibility !== 'hidden' && style.display !== 'none' };
     }).filter(item => item.visible).slice(0, 30);
   })()`;
   const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true });
@@ -258,33 +262,23 @@ Choose one next action that this ghost would actually take. Prefer realistic web
 Return only JSON:
 {"thought":"first-person thought while using the page","action":"click|scroll|stop","targetIndex":number|null,"reason":"short reason"}`;
 
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      signal: AbortSignal.timeout(20000),
-      headers: {
-        authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: ANALYSIS_MODEL,
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: screenshotUrl, detail: "high" }] }],
-      }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    const json = await response.json();
-    const text = json.output_text || json.output?.flatMap((item) => item.content || []).map((part) => part.text || "").join("") || "";
-    const cleaned = text.replace(/^```json\s*|\s*```$/g, "").trim();
-    return JSON.parse(cleaned);
-  } catch {
-    const target = elements.find((item) => /download|start|try|sign|get|learn/i.test(item.text)) || elements[0];
-    return {
-      thought: target ? `I see "${target.text || target.tag}" and I would try that next to understand the product.` : "I do not see an obvious next action, so I would scroll for context.",
-      action: target ? "click" : "scroll",
-      targetIndex: target?.index ?? null,
-      reason: "Fallback action selection.",
-    };
-  }
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    signal: AbortSignal.timeout(20000),
+    headers: {
+      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: ANALYSIS_MODEL,
+      input: [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: screenshotUrl, detail: "high" }] }],
+    }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const json = await response.json();
+  const text = extractOutputText(json);
+  const cleaned = text.replace(/^```json\s*|\s*```$/g, "").trim();
+  return JSON.parse(cleaned);
 }
 
 async function performGhostAction(cdp, action, elements) {
@@ -296,8 +290,8 @@ async function performGhostAction(cdp, action, elements) {
   if (action.action === "click") {
     const target = elements.find((item) => item.index === action.targetIndex) || elements[0];
     if (target) {
-      const x = Math.max(1, Math.round(target.x + target.width / 2));
-      const y = Math.max(1, Math.round(target.y + target.height / 2));
+      const x = clamp(Math.round(target.x + target.width / 2), 1, 1439);
+      const y = clamp(Math.round(target.y + target.height / 2), 1, 1099);
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
       await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
@@ -500,6 +494,11 @@ function dataUrlToBuffer(dataUrl) {
   return { mime: match[1], buffer: Buffer.from(match[2], "base64") };
 }
 
+function pngDimensions(buffer) {
+  if (buffer.length < 24 || buffer.toString("ascii", 1, 4) !== "PNG") return { width: 1440, height: 1100 };
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
 function runCommand(command, args, timeout = 60000) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -523,12 +522,72 @@ function runCommand(command, args, timeout = 60000) {
   });
 }
 
+async function commandWorks(command, args = ["-version"], timeout = 8000) {
+  try {
+    await runCommand(command, args, timeout);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function vendorFfmpegCandidates() {
+  const dir = path.join(root, ".vendor", "python", "imageio_ffmpeg", "binaries");
+  if (!existsSync(dir)) return [];
+  const files = await readdir(dir).catch(() => []);
+  return files
+    .filter((file) => file.startsWith("ffmpeg"))
+    .map((file) => path.join(dir, file));
+}
+
+async function findPythonExecutable() {
+  const candidates = [
+    process.env.PYTHON,
+    "/Users/johanvaz/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "python3",
+    "python",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (await commandWorks(candidate, ["--version"], 5000)) return candidate;
+  }
+  throw new Error("Python 3 is required to install the local MP4 encoder.");
+}
+
+async function installVendorFfmpeg() {
+  const python = await findPythonExecutable();
+  const target = path.join(root, ".vendor", "python");
+  await mkdir(target, { recursive: true });
+  await runCommand(python, ["-m", "pip", "install", "--quiet", "--target", target, "imageio-ffmpeg"], 120000);
+}
+
+async function findFfmpegExecutable() {
+  const candidates = [
+    process.env.FFMPEG_PATH,
+    ...(await vendorFfmpegCandidates()),
+    "/opt/homebrew/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    "/usr/bin/ffmpeg",
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate) && (await commandWorks(candidate))) return candidate;
+  }
+
+  await installVendorFfmpeg();
+  for (const candidate of await vendorFfmpegCandidates()) {
+    if (existsSync(candidate) && (await commandWorks(candidate))) return candidate;
+  }
+
+  throw new Error("A working ffmpeg encoder is required to generate the MP4.");
+}
+
 function ffmpegText(value, maxLength = 110) {
   return String(value || "")
     .replace(/\s+/g, " ")
     .slice(0, maxLength)
     .replace(/\\/g, "\\\\")
     .replace(/:/g, "\\:")
+    .replace(/,/g, "\\,")
     .replace(/'/g, "\\'")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]");
@@ -549,9 +608,7 @@ function pointForStep(index, total) {
 }
 
 async function generateReplayVideo(test) {
-  if (!existsSync("/usr/local/bin/ffmpeg")) {
-    throw new Error("ffmpeg is required to generate replay video.");
-  }
+  const ffmpeg = await findFfmpegExecutable();
   const replaySteps = test.sessionSteps?.length
     ? test.sessionSteps.map((step) => ({
         screenshotUrl: step.screenshotUrl,
@@ -570,6 +627,8 @@ async function generateReplayVideo(test) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-video-"));
   const font = "/System/Library/Fonts/Supplemental/Arial.ttf";
   const segments = [];
+  const scriptWords = String(test.walkthroughScript || "").trim().split(/\s+/).filter(Boolean).length;
+  const durationPerStep = Math.max(6.5, Math.min(10, scriptWords ? scriptWords / 2.25 / replaySteps.length : 7.5));
 
   try {
     for (const [index, step] of replaySteps.entries()) {
@@ -578,15 +637,21 @@ async function generateReplayVideo(test) {
       const imagePath = path.join(tempDir, `screen-${index}.png`);
       const segmentPath = path.join(tempDir, `segment-${index}.mp4`);
       await writeFile(imagePath, buffer);
-      const point = step.cursor ? { x: step.cursor.x / 1440, y: step.cursor.y / 1100 } : pointForStep(index, replaySteps.length);
+      const source = pngDimensions(buffer);
+      const scale = Math.min(1120 / source.width, 500 / source.height);
+      const displayWidth = Math.round(source.width * scale);
+      const displayHeight = Math.round(source.height * scale);
+      const originX = Math.round((1280 - displayWidth) / 2);
+      const originY = 28;
+      const point = step.cursor ? { x: clamp(step.cursor.x / source.width, 0.02, 0.98), y: clamp(step.cursor.y / source.height, 0.02, 0.98) } : pointForStep(index, replaySteps.length);
       const text = ffmpegText(step.thought);
       const ghost = test.ghosts?.find((item) => item.id === step.ghostId);
       const ghostLabel = ffmpegText(ghost?.name || ghost?.label || `Ghost ${index + 1}`, 40);
-      const cursorX = Math.round(point.x * 1120) + 80;
-      const cursorY = Math.round(point.y * 560) + 40;
+      const cursorX = clamp(Math.round(originX + point.x * displayWidth), 40, 1240);
+      const cursorY = clamp(Math.round(originY + point.y * displayHeight), 40, 520);
       const filters = [
-        "scale=1120:-2",
-        "pad=1280:720:80:(720-ih)/2:color=0x07040d",
+        "scale=w=1120:h=500:force_original_aspect_ratio=decrease",
+        "pad=1280:720:(ow-iw)/2:28:color=0x07040d",
         "drawbox=x=0:y=0:w=1280:h=720:color=0x140a2e@0.18:t=fill",
         `drawbox=x=${cursorX - 20}:y=${cursorY - 20}:w=40:h=40:color=0xffffff@0.28:t=fill`,
         `drawbox=x=${cursorX - 6}:y=${cursorY - 6}:w=12:h=12:color=0xb08cff@0.95:t=fill`,
@@ -594,20 +659,24 @@ async function generateReplayVideo(test) {
         `drawtext=fontfile='${font}':text='${ghostLabel} thinking aloud':x=82:y=560:fontsize=28:fontcolor=0xe9ddff`,
         `drawtext=fontfile='${font}':text='${text}':x=82:y=606:fontsize=24:fontcolor=0xffffff`,
       ].join(",");
-      await runCommand("/usr/local/bin/ffmpeg", [
+      await runCommand(ffmpeg, [
         "-y",
         "-loop",
         "1",
         "-i",
         imagePath,
         "-t",
-        "4.5",
+        String(durationPerStep.toFixed(2)),
         "-vf",
         filters,
         "-r",
         "30",
+        "-c:v",
+        "libx264",
         "-pix_fmt",
         "yuv420p",
+        "-movflags",
+        "+faststart",
         segmentPath,
       ]);
       segments.push(segmentPath);
@@ -617,14 +686,14 @@ async function generateReplayVideo(test) {
     const concatPath = path.join(tempDir, "concat.txt");
     await writeFile(concatPath, segments.map((segment) => `file '${segment.replace(/'/g, "'\\''")}'`).join("\n"));
     const silentVideoPath = path.join(tempDir, "silent.mp4");
-    await runCommand("/usr/local/bin/ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatPath, "-c", "copy", silentVideoPath]);
+    await runCommand(ffmpeg, ["-y", "-f", "concat", "-safe", "0", "-i", concatPath, "-c", "copy", silentVideoPath]);
 
-    const firstAudio = (test.reactions || []).map((reaction) => reaction.audioUrl).find(Boolean);
+    const firstAudio = test.walkthroughAudioUrl || (test.reactions || []).map((reaction) => reaction.audioUrl).find(Boolean);
     const fileName = `${test.id}-ghost-replay.mp4`;
     const outputPath = path.join(videoDir, fileName);
     if (firstAudio) {
       const audioPath = path.join(publicDir, firstAudio.replace(/^\//, ""));
-      await runCommand("/usr/local/bin/ffmpeg", [
+      await runCommand(ffmpeg, [
         "-y",
         "-i",
         silentVideoPath,
@@ -638,270 +707,17 @@ async function generateReplayVideo(test) {
         "copy",
         "-c:a",
         "aac",
-        "-shortest",
+        "-movflags",
+        "+faststart",
         outputPath,
       ]);
     } else {
-      await runCommand("/usr/local/bin/ffmpeg", ["-y", "-i", silentVideoPath, "-c", "copy", outputPath]);
+      await runCommand(ffmpeg, ["-y", "-i", silentVideoPath, "-c", "copy", "-movflags", "+faststart", outputPath]);
     }
     return `/generated/video/${fileName}`;
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
-}
-
-function fallbackAnalysis(test) {
-  const screenshots = test.screenshots.length ? test.screenshots : [{ id: "screen_1", label: "Uploaded screen", order: 0 }];
-  const ghosts = [
-    {
-      id: id("ghost"),
-      testId: test.id,
-      name: "Mara Quick",
-      archetype: "Impatient first-time user",
-      goal: `Finish "${test.intendedTask}" with as few decisions as possible.`,
-      context: "Arrived from a shared link and will leave if the value is not obvious.",
-      technicalLevel: "medium",
-      patienceInitial: 72,
-      skepticism: 45,
-      caresAbout: ["clear next step", "fast proof of value", "plain language"],
-      hates: ["vague CTAs", "signup before value", "long setup"],
-      avatarState: "annoyed",
-      color: "#ff8a5b",
-    },
-    {
-      id: id("ghost"),
-      testId: test.id,
-      name: "Nico Fog",
-      archetype: "Confused non-technical user",
-      goal: `Understand what ${test.productName || "the product"} does before taking action.`,
-      context: "Needs reassurance and concrete language before clicking.",
-      technicalLevel: "low",
-      patienceInitial: 82,
-      skepticism: 28,
-      caresAbout: ["examples", "gentle onboarding", "visible help"],
-      hates: ["jargon", "dense forms", "ambiguous icons"],
-      avatarState: "confused",
-      color: "#52d6c8",
-    },
-    {
-      id: id("ghost"),
-      testId: test.id,
-      name: "Ada Trace",
-      archetype: "Skeptical technical user",
-      goal: "Verify the claim, control data exposure, and see implementation credibility.",
-      context: "Compares the product promise against evidence, privacy, and workflow fit.",
-      technicalLevel: "high",
-      patienceInitial: 68,
-      skepticism: 78,
-      caresAbout: ["specific proof", "privacy", "implementation detail"],
-      hates: ["unsupported claims", "black boxes", "hidden costs"],
-      avatarState: "skeptical",
-      color: "#9b8cff",
-    },
-  ];
-
-  const reactions = [];
-  const rageQuitEvents = [];
-  ghosts.forEach((ghost, ghostIndex) => {
-    let patience = ghost.patienceInitial;
-    screenshots.forEach((screen, stepIndex) => {
-      if (rageQuitEvents.some((event) => event.ghostId === ghost.id)) return;
-      const before = patience;
-      const drop = ghostIndex === 0 ? 21 + stepIndex * 10 : ghostIndex === 1 ? 14 + stepIndex * 8 : 17 + stepIndex * 7;
-      patience = clamp(patience - drop);
-      const label = screen.label || `Screenshot ${stepIndex + 1}`;
-      const confusion =
-        stepIndex === 0
-          ? [`The screen does not immediately prove how it helps ${test.targetUser || "the target user"}.`]
-          : ["The previous step does not make this next action feel inevitable."];
-      const wouldContinue = patience > (ghostIndex === 0 ? 34 : 24) && stepIndex < screenshots.length - 1;
-      const emotion = !wouldContinue && patience <= 34 ? "rage_quit" : patience < 45 ? "annoyed" : ghostIndex === 2 ? "skeptical" : "confused";
-      const quote = !wouldContinue && patience <= 34
-        ? `I still do not know why this is worth my next click, so I am out at ${label}.`
-        : `I can guess the next move on ${label}, but I need a more concrete reason to trust it.`;
-
-      reactions.push({
-        id: id("reaction"),
-        testId: test.id,
-        ghostId: ghost.id,
-        screenshotId: screen.id,
-        stepOrder: stepIndex,
-        noticedFirst: stepIndex === 0 ? "The headline and primary call to action" : "The main form or next-step control",
-        interpretation: `${ghost.name} thinks the product wants them to ${test.intendedTask || "continue"}, but the benefit is not explicit enough.`,
-        confusion,
-        trustIssues: ghostIndex === 2 ? ["The screen needs stronger proof, privacy context, or a concrete example."] : [],
-        expectedNextAction: "Click the clearest primary action after understanding the value.",
-        actualLikelyAction: wouldContinue ? "Hesitate, scan, then continue." : "Stop the flow and look for a clearer alternative.",
-        quote,
-        patienceBefore: before,
-        patienceAfter: patience,
-        emotion,
-        wouldContinue,
-      });
-
-      if (!wouldContinue && patience <= 34) {
-        rageQuitEvents.push({
-          id: id("rage"),
-          testId: test.id,
-          ghostId: ghost.id,
-          screenshotId: screen.id,
-          stepOrder: stepIndex,
-          reason: "The screen asks for attention before proving value.",
-          exactTrigger: stepIndex === 0 ? "Vague first impression and unclear CTA promise" : "Commitment appears before enough context is earned",
-          userThought: quote,
-          severity: ghostIndex === 0 ? "critical" : "high",
-          replayNarration: `${ghost.name} loses patience on ${label}: ${quote}`,
-        });
-      }
-    });
-  });
-
-  const firstScreen = screenshots[0];
-  const frictionPoints = [
-    {
-      id: id("friction"),
-      testId: test.id,
-      title: "The first screen does not make the task payoff concrete",
-      description: `Ghosts can see a path forward, but they cannot quickly explain why ${test.productName || "the product"} is worth using for "${test.intendedTask}".`,
-      evidence: `On ${firstScreen.label || "Screenshot 1"}, reactions mention the headline/CTA before they mention a concrete outcome.`,
-      affectedGhostIds: ghosts.map((ghost) => ghost.id),
-      affectedScreenshotIds: [firstScreen.id],
-      severity: "critical",
-      recommendedFix: "Rewrite the headline and CTA around the user's task outcome, then add one proof point directly below.",
-    },
-    {
-      id: id("friction"),
-      testId: test.id,
-      title: "The flow needs stronger continuity between steps",
-      description: "Later screens do not clearly answer what changed, what was saved, or why the next step matters.",
-      evidence: screenshots.length > 1 ? `The transition into ${screenshots[1].label || "Screenshot 2"} creates hesitation.` : "The uploaded screen has no supporting flow context.",
-      affectedGhostIds: ghosts.slice(0, 2).map((ghost) => ghost.id),
-      affectedScreenshotIds: screenshots.slice(1, 2).map((screen) => screen.id),
-      severity: screenshots.length > 1 ? "high" : "medium",
-      recommendedFix: "Add a short step label or progress hint that explains what the user just completed and what happens next.",
-    },
-    {
-      id: id("friction"),
-      testId: test.id,
-      title: "Trust evidence arrives too late",
-      description: "The skeptical ghost needs privacy, proof, or an example before committing code, screenshots, or personal data.",
-      evidence: "Ada Trace flags a lack of evidence and privacy framing.",
-      affectedGhostIds: [ghosts[2].id],
-      affectedScreenshotIds: [firstScreen.id],
-      severity: "high",
-      recommendedFix: "Place a compact trust strip near the CTA: what is analyzed, what is private, and an example output.",
-    },
-  ];
-
-  return {
-    productUnderstanding: {
-      testId: test.id,
-      inferredProductType: "Task-focused product flow",
-      inferredPrimaryUser: test.targetUser || "First-time evaluator",
-      inferredUserGoal: test.intendedTask,
-      primaryCTA: "Primary action needs clarification",
-      keyUIElements: screenshots.map((screen) => ({
-        screenshotId: screen.id,
-        elements: ["headline", "primary CTA", "supporting copy", "navigation or form controls"],
-      })),
-      flowSummary: `${test.productName || "This product"} should help ${test.targetUser || "users"} complete "${test.intendedTask}", but the flow needs stronger evidence and step-to-step clarity.`,
-      uncertaintyNotes: ["Fallback analysis was used because OpenAI generation was unavailable or failed."],
-    },
-    ghosts,
-    reactions,
-    rageQuitEvents,
-    frictionPoints,
-    rewriteSuggestions: [
-      {
-        id: id("rewrite"),
-        testId: test.id,
-        type: "headline",
-        before: test.productDescription || "A broad product description",
-        after: `Help ${test.targetUser || "new users"} ${lowerFirst(test.intendedTask || "complete the key task")} without guessing what to click next.`,
-        rationale: "Names the audience, outcome, and clarity promise instead of relying on broad positioning.",
-        affectedFrictionPointIds: [frictionPoints[0].id],
-      },
-      {
-        id: id("rewrite"),
-        testId: test.id,
-        type: "cta",
-        before: "Get started",
-        after: `Run the ${test.intendedTask ? "task" : "flow"} check`,
-        rationale: "The CTA says what will happen next and lowers commitment anxiety.",
-        affectedFrictionPointIds: [frictionPoints[0].id],
-      },
-      {
-        id: id("rewrite"),
-        testId: test.id,
-        type: "subheadline",
-        before: "Everything you need in one place",
-        after: "Upload the flow, watch synthetic users react, then copy the top fixes.",
-        rationale: "Turns a generic benefit into a concrete three-step promise.",
-        affectedFrictionPointIds: [frictionPoints[1].id],
-      },
-    ],
-    layoutSuggestions: [
-      {
-        id: id("layout"),
-        testId: test.id,
-        screenshotId: firstScreen.id,
-        issue: "Primary value and primary action are visually separated from proof.",
-        suggestion: "Group headline, task-specific CTA, and a one-line proof statement in the first scan area.",
-        rationale: "This helps impatient and skeptical ghosts decide whether continuing is worth it.",
-        priority: "high",
-      },
-      {
-        id: id("layout"),
-        testId: test.id,
-        screenshotId: firstScreen.id,
-        issue: "The next step is not explicit enough.",
-        suggestion: "Add a small step indicator or helper line under the CTA explaining what happens after the click.",
-        rationale: "Nico needs a low-risk explanation before moving forward.",
-        priority: "medium",
-      },
-    ],
-    annotatedScreenshot: {
-      id: id("annotation"),
-      testId: test.id,
-      screenshotId: firstScreen.id,
-      imageUrl: firstScreen.url,
-      annotations: [
-        {
-          x: 0.12,
-          y: 0.16,
-          width: 0.5,
-          height: 0.18,
-          label: "Make payoff specific",
-          severity: "critical",
-          explanation: "The first scan should answer who this helps and what result they get.",
-        },
-        {
-          x: 0.18,
-          y: 0.42,
-          width: 0.26,
-          height: 0.12,
-          label: "Clarify next action",
-          severity: "high",
-          explanation: "The CTA should say whether this starts a demo, upload, signup, or analysis.",
-        },
-      ],
-    },
-    codexPatch: {
-      id: id("patch"),
-      testId: test.id,
-      status: "ready",
-      summary: "Approximate patch for the highest-priority copy and trust issues.",
-      filesChanged: [
-        {
-          path: "app/page.tsx",
-          changeSummary: "Rewrite hero copy, CTA, and trust strip.",
-          diff: `--- a/app/page.tsx\n+++ b/app/page.tsx\n@@\n- <h1>${test.productDescription || "Everything you need in one place"}</h1>\n- <button>Get started</button>\n+ <h1>Help ${test.targetUser || "new users"} ${lowerFirst(test.intendedTask || "complete the key task")} without guessing what to click next.</h1>\n+ <button>Run the flow check</button>\n+ <p>No public sharing by default. See findings before you commit.</p>`,
-        },
-      ],
-      instructions: "Apply the copy changes in the first viewport, then place the trust line within the same scan area as the CTA.",
-      safetyNotes: ["Generated without direct code context unless you pasted code into the test."],
-    },
-  };
 }
 
 function schemaForAnalysis() {
@@ -994,7 +810,7 @@ Screenshots in order: ${test.screenshots.length ? test.screenshots.map((screen, 
   }
 
   const json = await response.json();
-  const text = json.output_text || json.output?.flatMap((item) => item.content || []).map((part) => part.text || "").join("");
+  const text = extractOutputText(json);
   if (!text) throw new Error("OpenAI analysis returned no text");
   return JSON.parse(text);
 }
@@ -1035,10 +851,54 @@ async function generateVoiceClip(test, reaction) {
 
 async function generateWalkthroughVoice(test, ghost, steps) {
   requireOpenAiKey();
-  const narration = steps
-    .map((step, index) => `Step ${index + 1}. ${step.thought}`)
-    .join(" ")
-    .slice(0, 1800);
+  const personaDirections = {
+    impatient: "Mara is quick, a little impatient, direct, and practical. She notices delays fast and wants proof immediately.",
+    unsure: "Nico is hesitant, warm, and uncertain. He asks small self-checking questions and wants reassurance before committing.",
+    skeptical: "Ada is calm, sharp, and skeptical. She tests claims, looks for evidence, and sounds measured rather than harsh.",
+  };
+  const scriptPrompt = `Write the exact spoken voiceover for a recorded usability walkthrough.
+
+This must sound like a real person thinking out loud while using the site, not like a report, not like captions, and not like someone reading bullet points.
+
+Ghost:
+${JSON.stringify({
+  name: ghost.name,
+  archetype: ghost.archetype,
+  profile: test.ghostProfile,
+  personality: personaDirections[test.ghostProfile] || ghost.context,
+}, null, 2)}
+
+Website: ${test.websiteUrl || test.productName || "the website"}
+User's instruction: ${test.intendedTask}
+
+Observed actions and thoughts:
+${steps.map((step, index) => `${index + 1}. Screen/action: ${step.actionLabel || step.action || "looking"} | internal thought: ${step.thought}`).join("\n")}
+
+Output only the voiceover text.
+Rules:
+- First person present tense, as if the ghost is speaking live.
+- No step numbers, no titles, no markdown, no stage directions.
+- Use natural spoken rhythm with a few light pauses like "Okay," or "hmm" only when they fit.
+- Refer to what the ghost is seeing and doing on screen.
+- Keep it between 75 and 120 words.`;
+
+  const scriptResponse = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    signal: AbortSignal.timeout(25000),
+    headers: {
+      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: ANALYSIS_MODEL,
+      input: [{ role: "user", content: [{ type: "input_text", text: scriptPrompt }] }],
+    }),
+  });
+  if (!scriptResponse.ok) throw new Error(await scriptResponse.text());
+  const scriptJson = await scriptResponse.json();
+  const script = extractOutputText(scriptJson).trim();
+  if (!script) throw new Error("OpenAI did not return a voiceover script.");
+
   const response = await fetch("https://api.openai.com/v1/audio/speech", {
     method: "POST",
     signal: AbortSignal.timeout(30000),
@@ -1049,8 +909,8 @@ async function generateWalkthroughVoice(test, ghost, steps) {
     body: JSON.stringify({
       model: TTS_MODEL,
       voice: ghost.voice || "alloy",
-      input: narration || `I am exploring ${test.productName} and thinking through whether I can complete the task.`,
-      instructions: `Speak in first person as ${ghost.name}, ${ghost.archetype}. Natural, observant, concise. This is a usability walkthrough voiceover.`,
+      input: script,
+      instructions: `You are ${ghost.name}, ${ghost.archetype}. Speak like the conversational GPT voice mode: alive, human, responsive, and present-tense, as if you are currently using the website and thinking out loud. Do not sound like a narrator reading a script. Use the ghost's personality, natural emphasis, short pauses, and small changes in pace.`,
       response_format: "mp3",
     }),
   });
@@ -1066,7 +926,7 @@ async function generateWalkthroughVoice(test, ghost, steps) {
       reject(error);
     }
   });
-  return `/generated/audio/${fileName}`;
+  return { url: `/generated/audio/${fileName}`, script };
 }
 
 async function answerGhostQuestion(test, body) {
@@ -1109,7 +969,7 @@ Answer in first person as the ghost. Be specific, grounded, concise, and mention
   });
   if (!response.ok) throw new Error(await response.text());
   const json = await response.json();
-  const text = json.output_text || json.output?.flatMap((item) => item.content || []).map((part) => part.text || "").join("") || "";
+  const text = extractOutputText(json);
   const followup = {
     id: id("followup"),
     ghostId: ghost.id,
@@ -1197,14 +1057,15 @@ async function runTest(testId) {
       patienceAfter: Math.max(15, ghost.patienceInitial - (step.stepOrder + 1) * 10),
       wouldContinue: step.action !== "stop",
     }));
-    const walkthroughAudioUrl = await generateWalkthroughVoice(test, ghost, sessionSteps);
+    const walkthroughVoice = await generateWalkthroughVoice(test, ghost, sessionSteps);
 
     Object.assign(test, {
       ghosts,
       ghostIds: ghosts.map((item) => item.id),
       reactions,
       sessionSteps,
-      walkthroughAudioUrl,
+      walkthroughAudioUrl: walkthroughVoice.url,
+      walkthroughScript: walkthroughVoice.script,
       frictionPoints: [],
       rewriteSuggestions: [],
       layoutSuggestions: [],
@@ -1215,8 +1076,10 @@ async function runTest(testId) {
     });
 
     try {
+      delete test.videoError;
       test.videoUrl = await generateReplayVideo(test);
     } catch (error) {
+      delete test.videoUrl;
       test.videoError = error.message;
     }
 
@@ -1351,6 +1214,7 @@ const mime = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".mp3": "audio/mpeg",
+  ".mp4": "video/mp4",
 };
 
 async function serveStatic(res, pathname) {
