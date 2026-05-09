@@ -457,37 +457,41 @@ function lowerFirst(value) {
 }
 
 function defaultGhosts(test) {
-  const base = [
-    {
+  const profiles = {
+    impatient: {
       name: "Mara",
       archetype: "Impatient first-time user",
       goal: `Quickly decide whether ${test.productName} is worth trying.`,
       patienceInitial: 70,
       skepticism: 45,
       color: "#ff7a59",
+      voice: "verse",
     },
-    {
+    unsure: {
       name: "Nico",
       archetype: "Unsure non-technical user",
       goal: "Understand the product without decoding jargon.",
       patienceInitial: 82,
       skepticism: 30,
       color: "#8b5cf6",
+      voice: "alloy",
     },
-    {
+    skeptical: {
       name: "Ada",
       archetype: "Skeptical technical buyer",
       goal: "Look for proof, privacy, and workflow fit before trusting it.",
       patienceInitial: 68,
       skepticism: 80,
       color: "#45d6c5",
+      voice: "sage",
     },
-  ];
-  return base.slice(0, test.ghostCount || 3).map((ghost) => ({
+  };
+  const ghost = profiles[test.ghostProfile] || profiles.impatient;
+  return [{
     id: id("ghost"),
     testId: test.id,
     ...ghost,
-  }));
+  }];
 }
 
 function dataUrlToBuffer(dataUrl) {
@@ -1029,6 +1033,42 @@ async function generateVoiceClip(test, reaction) {
   return `/generated/audio/${fileName}`;
 }
 
+async function generateWalkthroughVoice(test, ghost, steps) {
+  requireOpenAiKey();
+  const narration = steps
+    .map((step, index) => `Step ${index + 1}. ${step.thought}`)
+    .join(" ")
+    .slice(0, 1800);
+  const response = await fetch("https://api.openai.com/v1/audio/speech", {
+    method: "POST",
+    signal: AbortSignal.timeout(30000),
+    headers: {
+      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: TTS_MODEL,
+      voice: ghost.voice || "alloy",
+      input: narration || `I am exploring ${test.productName} and thinking through whether I can complete the task.`,
+      instructions: `Speak in first person as ${ghost.name}, ${ghost.archetype}. Natural, observant, concise. This is a usability walkthrough voiceover.`,
+      response_format: "mp3",
+    }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const fileName = `${test.id}-walkthrough.mp3`;
+  const filePath = path.join(audioDir, fileName);
+  const stream = createWriteStream(filePath);
+  await new Promise(async (resolve, reject) => {
+    try {
+      for await (const chunk of response.body) stream.write(chunk);
+      stream.end(resolve);
+    } catch (error) {
+      reject(error);
+    }
+  });
+  return `/generated/audio/${fileName}`;
+}
+
 async function answerGhostQuestion(test, body) {
   requireOpenAiKey();
   const ghost = test.ghosts?.find((item) => item.id === body.ghostId) || test.ghosts?.[0];
@@ -1141,33 +1181,38 @@ async function runTest(testId) {
   await saveDb(db);
 
   try {
-    const openAiResult = await callOpenAiAnalysis(test);
-    const analysis = normalizeAnalysis(test, openAiResult);
-    Object.assign(test, analysis, {
-      ghostIds: analysis.ghosts.map((ghost) => ghost.id),
+    requireOpenAiKey();
+    const ghosts = defaultGhosts(test);
+    const ghost = ghosts[0];
+    const sessionSteps = await runLiveGhostSession(test, ghost);
+    const reactions = sessionSteps.map((step) => ({
+      id: id("reaction"),
+      testId: test.id,
+      ghostId: ghost.id,
+      screenshotId: test.screenshots[0]?.id,
+      stepOrder: step.stepOrder,
+      quote: step.thought,
+      emotion: step.action === "stop" ? "confused" : "curious",
+      patienceBefore: Math.max(20, ghost.patienceInitial - step.stepOrder * 10),
+      patienceAfter: Math.max(15, ghost.patienceInitial - (step.stepOrder + 1) * 10),
+      wouldContinue: step.action !== "stop",
+    }));
+    const walkthroughAudioUrl = await generateWalkthroughVoice(test, ghost, sessionSteps);
+
+    Object.assign(test, {
+      ghosts,
+      ghostIds: ghosts.map((item) => item.id),
+      reactions,
+      sessionSteps,
+      walkthroughAudioUrl,
+      frictionPoints: [],
+      rewriteSuggestions: [],
+      layoutSuggestions: [],
+      codexPatch: null,
       status: "generating_assets",
       updatedAt: new Date().toISOString(),
       aiMode: "openai",
     });
-
-    if (process.env.OPENAI_API_KEY) {
-      const keyReactions = test.ghosts.map((ghost) => test.reactions.find((reaction) => reaction.ghostId === ghost.id)).filter(Boolean);
-      for (const reaction of keyReactions) {
-        try {
-          reaction.audioUrl = await generateVoiceClip(test, reaction);
-        } catch (error) {
-          reaction.audioError = error.message;
-        }
-      }
-    }
-
-    if (test.websiteUrl && test.ghosts?.[0]) {
-      try {
-        test.sessionSteps = await runLiveGhostSession(test, test.ghosts[0]);
-      } catch (error) {
-        test.sessionError = error.message;
-      }
-    }
 
     try {
       test.videoUrl = await generateReplayVideo(test);
@@ -1229,7 +1274,8 @@ async function handleApi(req, res, pathname) {
       targetUser: body.targetUser || "",
       intendedTask: body.intendedTask,
       websiteUrl,
-      ghostCount: Math.max(1, Math.min(3, Number(body.ghostCount || 3))),
+      ghostCount: 1,
+      ghostProfile: body.ghostProfile || "impatient",
       codeContext: body.codeContext || "",
       status: "draft",
       createdAt: now,
