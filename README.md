@@ -1,13 +1,50 @@
 # iGhost
 
-iGhost is a dependency-free MVP for generating ghost walkthrough videos. Paste a website URL, describe what the ghost should try, choose a personality, and iGhost opens the site, drives the browser, creates a natural OpenAI voiceover, and renders a playable MP4 with a highlighted cursor.
+**Summon AI users before real users rage-quit.**
 
-## Run
+iGhost is an AI usability lab for builders who need fast, visceral feedback on a website or product flow. Paste a URL, give the ghost a job, choose the kind of user you want to emulate, and watch a synthetic user try the product in a narrated walkthrough.
 
-This workspace currently has Node available through Codex but no package manager is required.
+Instead of another generic UX report, iGhost produces a playable ghost session: what the user saw, where they hesitated, what confused them, and what to fix next.
+
+## What It Does
+
+- Drives a browser through the target website.
+- Captures the ghost's journey as an MP4 with a highlighted cursor.
+- Generates a personality-matched OpenAI voiceover.
+- Turns the walkthrough into actionable product advice.
+- Creates a Codex-ready patch prompt from the findings.
+
+## Product Loop
+
+1. Add a website URL.
+2. Describe what the ghost should try to do.
+3. Choose or create a ghost persona.
+4. Watch the ghost use the product.
+5. Review concrete fixes.
+6. Send the fix request to Codex for a branch/PR workflow.
+
+## Quick Start
+
+Requirements:
+
+- Node.js 24 or newer
+- Chrome, Chromium, Brave, or Edge for browser capture
+- ffmpeg for MP4 generation
+- An OpenAI API key
+
+Create a `.env` file:
 
 ```bash
-/Users/johanvaz/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node server.mjs
+OPENAI_API_KEY="<your-openai-api-key>"
+OPENAI_ANALYSIS_MODEL="gpt-5.5"
+OPENAI_TTS_MODEL="gpt-4o-mini-tts"
+PORT=4173
+```
+
+Run the app:
+
+```bash
+npm start
 ```
 
 Then open:
@@ -16,51 +53,33 @@ Then open:
 http://localhost:4173
 ```
 
-## OpenAI configuration
+## Voice
 
-The app reads `.env` automatically at server startup and keeps all OpenAI calls on the server. `OPENAI_API_KEY` is required for every walkthrough.
+iGhost uses OpenAI speech generation for the final MP4 voiceover. The default TTS model is `gpt-4o-mini-tts`, with expressive stage directions passed through the `instructions` field so each ghost sounds like a real person thinking out loud instead of a narrator reading captions.
 
-```bash
-export OPENAI_API_KEY="sk-..."
-export OPENAI_ANALYSIS_MODEL="gpt-5.5"
-export OPENAI_TTS_MODEL="gpt-4o-mini-tts"
-```
+The reasoning and voiceover script layer should use `gpt-5.5` through `OPENAI_ANALYSIS_MODEL`. That model shapes what the ghost notices, how they interpret the screen, and the personality-specific script that is then performed by the TTS model.
 
 ## Routes
 
-- `/` - landing page
-- `/test/:testId` - generated MP4 walkthrough output
-- `/api/tests/:testId/codex-patch` - create a Codex-ready patch request from the ghost findings
+- `/` - landing page and ghost test form
+- `/test/:testId` - generated walkthrough and advice
+- `/api/tests/:testId/codex-patch` - create a Codex-ready patch request
 - `/api/tests/:testId/codex-patch/send` - create a GitHub issue that tags `@codex` with the patch request
 
-## Website capture
+## Website Capture
 
-When a user enters a website URL, iGhost launches local headless Chrome/Brave/Edge/Chromium, captures screenshots while the ghost navigates, and passes those screenshots to OpenAI vision along with the task prompt.
+When a user enters a website URL, iGhost launches a local browser, captures screenshots while the ghost navigates, and sends those screenshots to OpenAI vision along with the user's task prompt.
 
-Set `CHROME_PATH` if the browser is not in a standard macOS app location.
+Set `CHROME_PATH` if your browser is not in a standard location.
 
-## Hosting
-
-This MVP should be hosted as a persistent Node service, because a walkthrough needs a real browser process, ffmpeg video rendering, and durable storage for generated MP4 files.
-
-Recommended production shape:
-
-- Frontend on Vercel or the same backend host.
-- Walkthrough worker on a container/server host such as Render, Railway, Fly.io, DigitalOcean, or AWS.
-- Generated videos in object storage such as Vercel Blob, S3, or Cloudflare R2.
-- `OPENAI_API_KEY`, `OPENAI_ANALYSIS_MODEL`, and `OPENAI_TTS_MODEL` configured as server environment variables.
-
-Vercel can host the frontend, but the current all-in-one server is not a clean Vercel deployment target without splitting the browser/video worker out of the request path.
-
-## Render deployment
+## Render Deployment
 
 The repo includes a Dockerfile and `render.yaml` Blueprint for Render. The container installs Chromium and ffmpeg, stores local data under the attached `/data` disk, and exposes `/health` for Render health checks.
 
 Create a Blueprint from this GitHub repo in Render and provide `OPENAI_API_KEY` when prompted. The Blueprint uses the `starter` plan because browser capture and MP4 rendering need more headroom than a static/free deployment.
 
-## Notes
+## Safety Notes
 
-- MP4 rendering uses a working local `ffmpeg`. If one is not available, the server installs a local `imageio-ffmpeg` encoder under `.vendor/`.
-- Voiceover is generated with OpenAI speech from a spoken monologue script, not from step labels.
-- Codex patch requests are generated from the AI walkthrough findings and are designed for branch/PR workflows, not direct pushes to `main`.
-- Sending a patch to Codex requires GitHub authentication. Locally, sign in with `gh auth login`; in production, set `GITHUB_TOKEN` or `IGHOST_GITHUB_TOKEN` with issue creation access.
+- Keep `.env` out of Git.
+- Review Codex-generated changes before merging.
+- Do not include private screenshots, API keys, or local data in public reports or GitHub issues.

@@ -22,7 +22,7 @@ await mkdir(videoDir, { recursive: true });
 await loadEnvFile();
 
 const PORT = Number(process.env.PORT || 4173);
-const ANALYSIS_MODEL = process.env.OPENAI_ANALYSIS_MODEL || "gpt-4o";
+const ANALYSIS_MODEL = process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.5";
 const TTS_MODEL = process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
 
 async function loadEnvFile() {
@@ -615,7 +615,6 @@ async function vendorFfmpegCandidates() {
 async function findPythonExecutable() {
   const candidates = [
     process.env.PYTHON,
-    "/Users/johanvaz/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3",
     "python3",
     "python",
   ].filter(Boolean);
@@ -959,6 +958,7 @@ async function generateWalkthroughVoice(test, ghost, steps) {
   const scriptPrompt = `Write the exact spoken voiceover for a recorded usability walkthrough.
 
 This must sound like a real person thinking out loud while using the site, not like a report, not like captions, and not like someone reading bullet points.
+Write for performance: include human pacing, small emotional turns, and screen-specific reactions the TTS model can act on.
 
 Ghost:
 ${JSON.stringify({
@@ -980,6 +980,8 @@ Rules:
 - No step numbers, no titles, no markdown, no stage directions.
 - Use natural spoken rhythm with a few light pauses like "Okay," or "hmm" only when they fit.
 - Refer to what the ghost is seeing and doing on screen.
+- Match the ghost's personality: word choice, patience, skepticism, confidence, and emotional rhythm should feel distinct.
+- Avoid polished narration. It should feel like a user forming opinions in the moment.
 - Keep it between 75 and 120 words.`;
 
   const scriptResponse = await fetch("https://api.openai.com/v1/responses", {
@@ -1010,7 +1012,7 @@ Rules:
       model: TTS_MODEL,
       voice: ghost.voice || "alloy",
       input: script,
-      instructions: `You are ${ghost.name}, ${ghost.archetype}. Speak like the conversational GPT voice mode: alive, human, responsive, and present-tense, as if you are currently using the website and thinking out loud. Do not sound like a narrator reading a script. Use natural emphasis, short pauses, small changes in pace, and emotional reactions that match what is happening on screen. ${ghost.voiceDirection || ghost.context || ""}`,
+      instructions: `Performance direction: You are ${ghost.name}, ${ghost.archetype}. Speak like a real user in a live usability test, not a voice actor and not a narrator. Stay present-tense, conversational, and emotionally responsive to what is happening on screen. Vary pace naturally: pause briefly when scanning, speed up when something is obvious, slow down when confused, and let small reactions come through. Do not flatten the delivery. Do not overperform. ${ghost.voiceDirection || ghost.context || ""}`,
       response_format: "mp3",
     }),
   });
