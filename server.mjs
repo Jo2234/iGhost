@@ -292,7 +292,7 @@ Return only JSON:
   if (!response.ok) throw new Error(await response.text());
   const json = await response.json();
   const text = extractOutputText(json);
-  const cleaned = text.replace(/^```json\s*|\s*```$/g, "").trim();
+  const cleaned = cleanJsonText(text);
   return JSON.parse(cleaned);
 }
 
@@ -483,7 +483,7 @@ function defaultGhosts(test) {
       goal: "Understand the product without decoding jargon.",
       patienceInitial: 82,
       skepticism: 30,
-      color: "#8b5cf6",
+      color: "#16a34a",
       voice: "alloy",
     },
     skeptical: {
@@ -608,6 +608,10 @@ function ffmpegText(value, maxLength = 82) {
     .replace(/'/g, "")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]");
+}
+
+function cleanJsonText(text) {
+  return String(text || "").replace(/^```json\s*|\s*```$/g, "").trim();
 }
 
 function thoughtForReaction(reaction) {
@@ -969,6 +973,68 @@ Rules:
   return { url: `/generated/audio/${fileName}`, script };
 }
 
+async function generateActionableAdvice(test, ghost, steps) {
+  requireOpenAiKey();
+  const prompt = `You are a senior product designer reviewing a short usability walkthrough.
+
+The user asked the ghost to do this:
+${test.intendedTask}
+
+Website:
+${test.websiteUrl || test.productName || "Unknown"}
+
+Ghost:
+${JSON.stringify({ name: ghost.name, archetype: ghost.archetype, profile: test.ghostProfile }, null, 2)}
+
+What the ghost did:
+${steps.map((step, index) => `${index + 1}. ${step.actionLabel || step.action}: ${step.thought}`).join("\n")}
+
+Return JSON only:
+{
+  "summary": "one sentence describing the main product/design issue",
+  "items": [
+    {
+      "title": "short imperative recommendation",
+      "why": "specific reason grounded in what the ghost tried to do",
+      "change": "concrete UI/content change the site owner could make"
+    }
+  ]
+}
+
+Rules:
+- Give 2 or 3 recommendations.
+- Make the advice actionable, not a transcript.
+- Tie every recommendation to the ghost's task and behavior.
+- If the task was to find a price, recommend making the price more prominent if the ghost struggled to find it.
+- Keep each field concise.`;
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    signal: AbortSignal.timeout(25000),
+    headers: {
+      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: ANALYSIS_MODEL,
+      input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+    }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const json = await response.json();
+  const advice = JSON.parse(cleanJsonText(extractOutputText(json)));
+  return {
+    summary: String(advice.summary || "Improve the page around the user's task.").trim(),
+    items: Array.isArray(advice.items)
+      ? advice.items.slice(0, 3).map((item) => ({
+          title: String(item.title || "Clarify the next step").trim(),
+          why: String(item.why || "").trim(),
+          change: String(item.change || "").trim(),
+        }))
+      : [],
+  };
+}
+
 async function answerGhostQuestion(test, body) {
   requireOpenAiKey();
   const ghost = test.ghosts?.find((item) => item.id === body.ghostId) || test.ghosts?.[0];
@@ -1098,6 +1164,7 @@ async function runTest(testId) {
       wouldContinue: step.action !== "stop",
     }));
     const walkthroughVoice = await generateWalkthroughVoice(test, ghost, sessionSteps);
+    const actionableAdvice = await generateActionableAdvice(test, ghost, sessionSteps);
 
     Object.assign(test, {
       ghosts,
@@ -1106,6 +1173,7 @@ async function runTest(testId) {
       sessionSteps,
       walkthroughAudioUrl: walkthroughVoice.url,
       walkthroughScript: walkthroughVoice.script,
+      actionableAdvice,
       frictionPoints: [],
       rewriteSuggestions: [],
       layoutSuggestions: [],

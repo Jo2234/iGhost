@@ -144,8 +144,13 @@ function ghostName(test) {
   return test.ghosts?.[0]?.name || "Ghost";
 }
 
+function advice(test) {
+  return test.actionableAdvice?.items?.length ? test.actionableAdvice : null;
+}
+
 function output(test) {
   const hasVideo = Boolean(test.videoUrl);
+  const recommendation = advice(test);
   shell(`
     <section class="watch">
       <header class="watch-head">
@@ -165,7 +170,21 @@ function output(test) {
           <p class="status error">${escapeHtml(test.videoError || "The MP4 was not generated.")}</p>
         `}
       </section>
-      ${test.walkthroughScript ? `<p class="transcript">${escapeHtml(test.walkthroughScript)}</p>` : ""}
+      ${recommendation ? `
+        <section class="advice-panel">
+          <p class="eyebrow">Actionable advice</p>
+          <h2>${escapeHtml(recommendation.summary)}</h2>
+          <div class="advice-grid">
+            ${recommendation.items.map((item) => `
+              <article>
+                <h3>${escapeHtml(item.title)}</h3>
+                <p>${escapeHtml(item.why)}</p>
+                <strong>${escapeHtml(item.change)}</strong>
+              </article>
+            `).join("")}
+          </div>
+        </section>
+      ` : ""}
     </section>
   `);
 }
