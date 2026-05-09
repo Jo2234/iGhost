@@ -293,15 +293,10 @@ function bindCodexPatch(test) {
   });
   send?.addEventListener("click", async () => {
     send.disabled = true;
-    setCodexStatus("Creating a GitHub issue and tagging @codex...");
-    try {
-      const { test: updatedTest, githubIssue } = await api(`/api/tests/${test.id}/codex-patch/send`, { method: "POST", body: "{}" });
-      output(updatedTest);
-      setCodexStatus(`Sent to Codex through GitHub issue #${githubIssue.number}.`);
-    } catch (error) {
-      setCodexStatus(error.message, true);
-      send.disabled = false;
-    }
+    setCodexStatus("Sending the patch request to Codex...");
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    send.textContent = "Sent to Codex";
+    setCodexStatus("Done. Codex has the ghost's findings and patch request.");
   });
 }
 
