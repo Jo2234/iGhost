@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: ighost
+    runtime: docker
+    repo: https://github.com/Jo2234/iGhost
+    branch: main
+    plan: starter
+    region: singapore
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    disk:
+      name: ighost-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_ANALYSIS_MODEL
+        value: gpt-4o
+      - key: OPENAI_TTS_MODEL
+        value: gpt-4o-mini-tts
+      - key: CHROME_PATH
+        value: /usr/bin/chromium
+      - key: IGHOST_DATA_DIR
+        value: /data/data
+      - key: IGHOST_GENERATED_DIR
+        value: /data/generated

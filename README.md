@@ -50,6 +50,12 @@ Recommended production shape:
 
 Vercel can host the frontend, but the current all-in-one server is not a clean Vercel deployment target without splitting the browser/video worker out of the request path.
 
+## Render deployment
+
+The repo includes a Dockerfile and `render.yaml` Blueprint for Render. The container installs Chromium and ffmpeg, stores local data under the attached `/data` disk, and exposes `/health` for Render health checks.
+
+Create a Blueprint from this GitHub repo in Render and provide `OPENAI_API_KEY` when prompted. The Blueprint uses the `starter` plan because browser capture and MP4 rendering need more headroom than a static/free deployment.
+
 ## Notes
 
 - MP4 rendering uses a working local `ffmpeg`. If one is not available, the server installs a local `imageio-ffmpeg` encoder under `.vendor/`.

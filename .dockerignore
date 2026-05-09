@@ -1,0 +1,8 @@
+.DS_Store
+.env
+.git
+.vendor
+data
+public/generated
+node_modules
+npm-debug.log

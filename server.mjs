@@ -8,10 +8,11 @@ import { spawn } from "node:child_process";
 
 const root = process.cwd();
 const publicDir = path.join(root, "public");
-const dataDir = path.join(root, "data");
+const dataDir = process.env.IGHOST_DATA_DIR || path.join(root, "data");
 const dbPath = path.join(dataDir, "db.json");
-const audioDir = path.join(publicDir, "generated", "audio");
-const videoDir = path.join(publicDir, "generated", "video");
+const generatedDir = process.env.IGHOST_GENERATED_DIR || path.join(publicDir, "generated");
+const audioDir = path.join(generatedDir, "audio");
+const videoDir = path.join(generatedDir, "video");
 const cursorPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACQ0lEQVR4nO1bO5bDIAyU9FylSJ06F0qxR8k59ihb7IW2dk2xrbfZws/PHwmNwDw8ZSCIGQYZMCa6cOFCz+CSwaZpemrrMvNPbG/+49BJCNcShM9OPFoIboV4lBDcGnG0ENIyeUR8rhD8rqiTSjmBCxHXkIaIYRWCA8l7SLvEsIggDZFXt2tx6EBYRBFfi2HOEy4HTMeqliCvjqd1AVci/9gpG41tJU8+4ILk90h7xcgWYSAf7kHEl/8dFf1I8Bww7Y9+NHlrO/ccHgPF4BHYpjVH5Dlgyh/9CPLa9s0ukIwOlH7chfZPwDus6NF3xVnjNVClTn1/0tfyt9ebPozx3PmAjQ5wz/014g4h9gRImjWBEAYw8pZ6iCknpU54DKSy6mux5MdHFRD23yLzetPvrM4tczq4psFAfphtOCe+/G1LiKhkKBQMr5WjpkIxATSjbylvXoCzQahzSOmAR0kuIwmeW4CXbXkL//8RBkAbY8Y+4KZdByjjZ4NB5wCPiMeZcvS3BNg8IpsvhGSvEAmrlaOsH7UZGpGkQLvBkO2waxqAzwPc9kcLUPJEKGsTpJ4CnJ8HoCe26DhrvCSjHchLyUCY+idbBQcuSBVdALF+9IuRMSAnhAgre4UOF6A7rWnHPPoIByTFi4ix9tvhPbCmUtf3A058Q8RN3vQYVDSWWiMf8RRIBdwAFVoslQ0rxCg3wO8Jck4vur4pOke3d4XPdFvce4gjNYMj4I3PuK50/MXIEt1+M7REt1+NtfTd4IUL1Df+AO3fA5QZtENGAAAAAElFTkSuQmCC";
 
 await mkdir(dataDir, { recursive: true });
@@ -108,6 +109,10 @@ function safeSlug(text) {
 function findBrowserExecutable() {
   const candidates = [
     process.env.CHROME_PATH,
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
@@ -195,6 +200,8 @@ async function launchBrowserSession(url) {
   const child = spawn(browser, [
     "--headless",
     "--disable-gpu",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
     "--no-first-run",
     "--no-default-browser-check",
     "--window-size=1440,1100",
@@ -358,6 +365,8 @@ async function captureWebsiteScreenshot(url) {
   const args = [
     "--headless",
     "--disable-gpu",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
     "--hide-scrollbars",
     "--no-first-run",
     "--no-default-browser-check",
@@ -1351,7 +1360,9 @@ const mime = {
 async function serveStatic(req, res, pathname) {
   const requested = pathname === "/" ? "/index.html" : pathname;
   const safePath = path.normalize(requested).replace(/^(\.\.[/\\])+/, "");
-  const filePath = path.join(publicDir, safePath);
+  const filePath = safePath.startsWith("/generated/")
+    ? path.join(generatedDir, safePath.replace(/^\/generated\//, ""))
+    : path.join(publicDir, safePath);
   try {
     const fileStat = await stat(filePath);
     const type = mime[path.extname(filePath)] || "application/octet-stream";
@@ -1399,6 +1410,9 @@ async function serveStatic(req, res, pathname) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   try {
+    if (url.pathname === "/health") {
+      return send(res, 200, { status: "ok" });
+    }
     if (url.pathname.startsWith("/api/")) {
       await handleApi(req, res, url.pathname);
     } else {
@@ -1409,6 +1423,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`iGhost running at http://localhost:${PORT}`);
 });
