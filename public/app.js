@@ -197,7 +197,6 @@ function codexPatchMarkup(test) {
       <div class="codex-actions">
         <button class="button primary" id="codex-request" type="button">${prompt ? "Regenerate request" : "Generate Codex request"}</button>
         <button class="button ${prompt ? "" : "hidden"}" id="codex-copy" type="button">Copy prompt</button>
-        <button class="button ${prompt && !issueUrl ? "" : "hidden"}" id="codex-send" type="button">Send to Codex</button>
         <a class="button ${issueUrl ? "" : "hidden"}" id="codex-issue" href="${escapeHtml(issueUrl)}" target="_blank" rel="noreferrer">View GitHub issue</a>
       </div>
       <div class="status hidden" id="codex-status"></div>
@@ -207,7 +206,17 @@ function codexPatchMarkup(test) {
           <span>${escapeHtml(patch?.repoUrl || "GitHub repo")}</span>
           ${issueUrl ? `<span>Issue #${escapeHtml(patch.githubIssue.number)}</span>` : ""}
         </div>
-        <textarea class="codex-prompt" id="codex-prompt" readonly>${escapeHtml(prompt)}</textarea>
+        <div class="codex-prompt-box">
+          <textarea class="codex-prompt" id="codex-prompt" readonly>${escapeHtml(prompt)}</textarea>
+          <div class="codex-send-row">
+            <div class="codex-sent hidden" id="codex-sent">
+              <span></span>
+              <strong>Sent to Codex</strong>
+              <small>GitHub fix request queued</small>
+            </div>
+            <button class="button primary ${prompt && !issueUrl ? "" : "hidden"}" id="codex-send" type="button">Fix with Codex in GitHub</button>
+          </div>
+        </div>
       </div>
     </section>
   `;
@@ -293,10 +302,11 @@ function bindCodexPatch(test) {
   });
   send?.addEventListener("click", async () => {
     send.disabled = true;
-    setCodexStatus("Sending the patch request to Codex...");
+    setCodexStatus("Sending the GitHub fix request to Codex...");
     await new Promise((resolve) => setTimeout(resolve, 1400));
-    send.textContent = "Sent to Codex";
-    setCodexStatus("Done. Codex has the ghost's findings and patch request.");
+    send.classList.add("hidden");
+    app.querySelector("#codex-sent")?.classList.remove("hidden");
+    setCodexStatus("Done. Codex has the ghost's findings and will fix it in GitHub.");
   });
 }
 

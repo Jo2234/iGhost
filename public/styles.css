@@ -397,6 +397,16 @@ textarea:focus {
   gap: 0.75rem;
 }
 
+.codex-prompt-box {
+  position: relative;
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #050805;
+}
+
 .codex-meta span {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -408,9 +418,64 @@ textarea:focus {
 
 .codex-prompt {
   min-height: 22rem;
+  padding-bottom: 4.5rem;
+  border: 0;
+  background: transparent;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.88rem;
   line-height: 1.5;
+}
+
+.codex-send-row {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.codex-sent {
+  display: grid;
+  grid-template-columns: 2rem auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.65rem;
+  align-items: center;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid rgba(49, 214, 107, 0.45);
+  border-radius: 999px;
+  background: rgba(49, 214, 107, 0.13);
+  color: var(--ink);
+  box-shadow: 0 0 28px rgba(49, 214, 107, 0.16);
+}
+
+.codex-sent span {
+  grid-row: 1 / span 2;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.codex-sent span::before {
+  content: "";
+  width: 0.6rem;
+  height: 0.35rem;
+  border-left: 2px solid #031006;
+  border-bottom: 2px solid #031006;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+
+.codex-sent strong,
+.codex-sent small {
+  line-height: 1.1;
+}
+
+.codex-sent small {
+  color: var(--muted);
 }
 
 .steps-list {
