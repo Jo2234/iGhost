@@ -37,6 +37,19 @@ When a user enters a website URL, iGhost launches local headless Chrome/Brave/Ed
 
 Set `CHROME_PATH` if the browser is not in a standard macOS app location.
 
+## Hosting
+
+This MVP should be hosted as a persistent Node service, because a walkthrough needs a real browser process, ffmpeg video rendering, and durable storage for generated MP4 files.
+
+Recommended production shape:
+
+- Frontend on Vercel or the same backend host.
+- Walkthrough worker on a container/server host such as Render, Railway, Fly.io, DigitalOcean, or AWS.
+- Generated videos in object storage such as Vercel Blob, S3, or Cloudflare R2.
+- `OPENAI_API_KEY`, `OPENAI_ANALYSIS_MODEL`, and `OPENAI_TTS_MODEL` configured as server environment variables.
+
+Vercel can host the frontend, but the current all-in-one server is not a clean Vercel deployment target without splitting the browser/video worker out of the request path.
+
 ## Notes
 
 - MP4 rendering uses a working local `ffmpeg`. If one is not available, the server installs a local `imageio-ffmpeg` encoder under `.vendor/`.

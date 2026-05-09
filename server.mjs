@@ -709,9 +709,9 @@ async function generateReplayVideo(test) {
       const cursorX = cursorExpression(startCursor, endCursor, "x", -32);
       const cursorY = cursorExpression(startCursor, endCursor, "y", -32);
       const filters = [
-        "[0:v]scale=w=1120:h=500:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:28:color=0x07040d,drawbox=x=0:y=0:w=1280:h=720:color=0x140a2e@0.18:t=fill[base]",
+        "[0:v]scale=w=1120:h=500:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:28:color=0x030503,drawbox=x=0:y=0:w=1280:h=720:color=0x061009@0.2:t=fill[base]",
         `[base][1:v]overlay=x=${cursorX}:y=${cursorY}:eval=frame:format=auto[cursor]`,
-        `[cursor]drawbox=x=54:y=538:w=1172:h=132:color=0x05030a@0.82:t=fill,drawtext=fontfile='${font}':text='${ghostLabel} thinking aloud':x=82:y=560:fontsize=28:fontcolor=0xe9ddff,drawtext=fontfile='${font}':text='${text}':x=82:y=606:fontsize=24:fontcolor=0xffffff[v]`,
+        `[cursor]drawbox=x=54:y=538:w=1172:h=132:color=0x020402@0.86:t=fill,drawbox=x=54:y=538:w=1172:h=2:color=0x31d66b@0.9:t=fill,drawtext=fontfile='${font}':text='${ghostLabel} thinking aloud':x=82:y=560:fontsize=28:fontcolor=0x54f084,drawtext=fontfile='${font}':text='${text}':x=82:y=606:fontsize=24:fontcolor=0xf5fff6[v]`,
       ].join(";");
       await runCommand(ffmpeg, [
         "-y",
