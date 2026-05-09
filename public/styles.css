@@ -373,16 +373,62 @@ textarea:focus {
 }
 
 .output-actions,
-.step-controls {
+.step-controls,
+.voice-actions {
   display: flex;
   gap: 0.65rem;
   flex-wrap: wrap;
+}
+
+.output-actions a {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.video-first {
+  margin-bottom: 1rem;
+}
+
+.session-video {
+  width: 100%;
+  display: block;
+  border-radius: 22px;
+  background: #05030a;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.client-video-maker {
+  padding: 1rem;
+  border-radius: 22px;
+  background: rgba(16, 11, 31, 0.78);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+#replay-canvas {
+  width: 100%;
+  display: block;
+  border-radius: 16px;
+  background: #05030a;
+}
+
+.video-maker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.9rem;
 }
 
 .stage {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(20rem, 0.65fr);
   gap: 1rem;
+}
+
+.secondary-stage {
+  opacity: 0.92;
 }
 
 .viewport {

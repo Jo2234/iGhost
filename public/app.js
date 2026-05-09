@@ -4,6 +4,8 @@ const state = {
   screenshots: [],
   selectedStep: 0,
   selectedGhostId: "",
+  recognition: null,
+  clientVideoUrl: "",
 };
 
 const ghostProfiles = [
@@ -262,16 +264,32 @@ function renderOutput(test) {
     <section class="output">
       <header class="output-head">
         <div>
-          <p class="eyebrow">Ghost viewpoint</p>
-          <h1>${escapeHtml(ghostName(ghost, activeGhostIndex))} is testing ${escapeHtml(test.productName || "your flow")}</h1>
+          <p class="eyebrow">Ghost session replay</p>
+          <h1>Watch ${escapeHtml(ghostName(ghost, activeGhostIndex))} use ${escapeHtml(test.productName || "your flow")}</h1>
         </div>
         <div class="output-actions">
           <button class="button" id="download-report">Download report</button>
+          ${test.videoUrl ? `<a class="button primary" href="${test.videoUrl}" download>Download video</a>` : ""}
           <button class="button primary" id="request-patch">Request Codex patch</button>
         </div>
       </header>
 
-      <div class="stage">
+      <div class="video-first">
+        ${test.videoUrl ? `
+          <video class="session-video" controls playsinline src="${test.videoUrl}"></video>
+        ` : `
+          <div class="client-video-maker">
+            <canvas id="replay-canvas" width="1280" height="720"></canvas>
+            <div class="video-maker-actions">
+              <button class="button primary" id="record-replay">Generate downloadable replay video</button>
+              <a class="button hidden" id="download-client-video" download="ighost-replay.webm">Download video</a>
+            </div>
+            <p class="meta">Local MP4 export is unavailable on this machine, so iGhost can record the replay in-browser as WebM.</p>
+          </div>
+        `}
+      </div>
+
+      <div class="stage secondary-stage">
         <div class="viewport">
           ${screen.url ? `<img src="${screen.url}" alt="${escapeHtml(screen.label || "Product screenshot")}">` : `<div class="url-card"><span>Website under test</span><strong>${escapeHtml(test.websiteUrl || test.productName)}</strong></div>`}
           <div class="thought">
@@ -297,10 +315,14 @@ function renderOutput(test) {
           </div>
           <form class="interrupt-box" id="interrupt-form">
             <label>
-              <span>Interrupt this ghost</span>
-              <textarea name="question" placeholder="Ask about something specific on screen..."></textarea>
+              <span>Ask the ghost by voice</span>
+              <textarea name="question" placeholder="Press Speak, then ask about something specific on screen..."></textarea>
             </label>
-            <button class="button primary" type="submit">Ask ghost</button>
+            <div class="voice-actions">
+              <button class="button" type="button" id="speak-question">Speak</button>
+              <button class="button primary" type="submit">Ask ghost</button>
+            </div>
+            <small>This is a follow-up question after the generated session. Live mid-session interruption requires a Realtime browser-control loop.</small>
           </form>
           <div class="interrupt-answer" id="interrupt-answer">
             ${renderFollowups(test, ghost.id)}
@@ -348,6 +370,8 @@ function renderOutput(test) {
   app.querySelector("#request-patch")?.addEventListener("click", () => {
     app.querySelector(".patch")?.classList.toggle("hidden");
   });
+  drawReplayCanvas(test, 0);
+  app.querySelector("#record-replay")?.addEventListener("click", () => recordClientReplay(test));
   app.querySelector("#interrupt-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -367,6 +391,178 @@ function renderOutput(test) {
       answerBox.innerHTML = `<p class="error-text">${escapeHtml(error.message)}</p>`;
     }
   });
+  app.querySelector("#speak-question")?.addEventListener("click", () => startVoiceQuestion());
+}
+
+async function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+function cursorPoint(index) {
+  const points = [
+    [0.22, 0.32],
+    [0.54, 0.48],
+    [0.72, 0.56],
+    [0.35, 0.72],
+  ];
+  return points[index % points.length];
+}
+
+async function drawReplayCanvas(test, progress = 0) {
+  const canvas = app.querySelector("#replay-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const reactions = test.reactions || [];
+  const step = Math.min(reactions.length - 1, Math.floor(progress / 4500));
+  const local = (progress % 4500) / 4500;
+  const reaction = reactions[step] || reactions[0] || {};
+  const screen = test.screenshots?.find((item) => item.id === reaction.screenshotId) || test.screenshots?.[0];
+  const ghost = test.ghosts?.find((item) => item.id === reaction.ghostId) || test.ghosts?.[0] || {};
+  ctx.fillStyle = "#06040b";
+  ctx.fillRect(0, 0, 1280, 720);
+  if (screen?.url) {
+    try {
+      const image = await loadImage(screen.url);
+      const scale = Math.min(1120 / image.width, 560 / image.height);
+      const width = image.width * scale;
+      const height = image.height * scale;
+      ctx.drawImage(image, 80 + (1120 - width) / 2, 30 + (560 - height) / 2, width, height);
+    } catch {
+      ctx.fillStyle = "#17102c";
+      ctx.fillRect(80, 30, 1120, 560);
+    }
+  }
+  const [startX, startY] = cursorPoint(step);
+  const [endX, endY] = cursorPoint(step + 1);
+  const x = 80 + 1120 * (startX + (endX - startX) * local);
+  const y = 30 + 560 * (startY + (endY - startY) * local);
+  ctx.fillStyle = "rgba(255,255,255,.28)";
+  ctx.beginPath();
+  ctx.arc(x, y, 24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#b08cff";
+  ctx.beginPath();
+  ctx.arc(x, y, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(5,3,10,.86)";
+  roundRectCanvas(ctx, 54, 538, 1172, 132, 18);
+  ctx.fillStyle = "#e9ddff";
+  ctx.font = "700 28px Arial, sans-serif";
+  ctx.fillText(`${ghostName(ghost)} thinking aloud`, 82, 580);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "24px Arial, sans-serif";
+  wrapCanvasText(ctx, reactionText(reaction), 82, 624, 1080, 31, 2);
+}
+
+function roundRectCanvas(ctx, x, y, width, height, radius) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + width, y, x + width, y + height, radius);
+  ctx.arcTo(x + width, y + height, x, y + height, radius);
+  ctx.arcTo(x, y + height, x, y, radius);
+  ctx.arcTo(x, y, x + width, y, radius);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
+  const words = String(text || "").split(" ");
+  let line = "";
+  let lines = 0;
+  for (const word of words) {
+    const testLine = `${line}${word} `;
+    if (ctx.measureText(testLine).width > maxWidth && line) {
+      ctx.fillText(line.trim(), x, y);
+      line = `${word} `;
+      y += lineHeight;
+      lines += 1;
+      if (lines >= maxLines) return;
+    } else {
+      line = testLine;
+    }
+  }
+  ctx.fillText(line.trim(), x, y);
+}
+
+async function recordClientReplay(test) {
+  const canvas = app.querySelector("#replay-canvas");
+  const button = app.querySelector("#record-replay");
+  const link = app.querySelector("#download-client-video");
+  if (!canvas || !window.MediaRecorder) return;
+  button.textContent = "Recording replay...";
+  button.disabled = true;
+  const canvasStream = canvas.captureStream(30);
+  const firstAudio = (test.reactions || []).map((reaction) => reaction.audioUrl).find(Boolean);
+  let audio;
+  let stream = canvasStream;
+  if (firstAudio) {
+    audio = new Audio(firstAudio);
+    audio.crossOrigin = "anonymous";
+    await audio.play().catch(() => {});
+    audio.pause();
+    audio.currentTime = 0;
+    if (audio.captureStream) {
+      stream = new MediaStream([...canvasStream.getVideoTracks(), ...audio.captureStream().getAudioTracks()]);
+    }
+  }
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+  recorder.ondataavailable = (event) => {
+    if (event.data.size) chunks.push(event.data);
+  };
+  recorder.onstop = () => {
+    const blob = new Blob(chunks, { type: "video/webm" });
+    state.clientVideoUrl = URL.createObjectURL(blob);
+    link.href = state.clientVideoUrl;
+    link.classList.remove("hidden");
+    button.textContent = "Regenerate replay video";
+    button.disabled = false;
+  };
+  recorder.start();
+  const duration = Math.max(4500, (test.reactions?.length || 1) * 4500);
+  const start = performance.now();
+  if (audio) audio.play().catch(() => {});
+  async function tick(now) {
+    const elapsed = now - start;
+    await drawReplayCanvas(test, elapsed);
+    if (elapsed < duration) {
+      requestAnimationFrame(tick);
+    } else {
+      if (audio) audio.pause();
+      recorder.stop();
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+function startVoiceQuestion() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const textarea = app.querySelector("#interrupt-form textarea");
+  const button = app.querySelector("#speak-question");
+  if (!SpeechRecognition || !textarea) {
+    textarea.placeholder = "Speech input is not supported in this browser. Type your question here.";
+    return;
+  }
+  const recognition = new SpeechRecognition();
+  recognition.lang = "en-US";
+  recognition.interimResults = false;
+  recognition.continuous = false;
+  button.textContent = "Listening...";
+  recognition.onresult = (event) => {
+    textarea.value = event.results?.[0]?.[0]?.transcript || "";
+  };
+  recognition.onerror = () => {
+    textarea.placeholder = "Could not hear that. Try again or type the question.";
+  };
+  recognition.onend = () => {
+    button.textContent = "Speak";
+  };
+  recognition.start();
 }
 
 function renderFollowups(test, ghostId, activeId = "") {

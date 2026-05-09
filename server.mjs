@@ -11,9 +11,11 @@ const publicDir = path.join(root, "public");
 const dataDir = path.join(root, "data");
 const dbPath = path.join(dataDir, "db.json");
 const audioDir = path.join(publicDir, "generated", "audio");
+const videoDir = path.join(publicDir, "generated", "video");
 
 await mkdir(dataDir, { recursive: true });
 await mkdir(audioDir, { recursive: true });
+await mkdir(videoDir, { recursive: true });
 
 await loadEnvFile();
 
@@ -227,6 +229,151 @@ function clamp(value, min = 0, max = 100) {
 function lowerFirst(value) {
   const text = String(value || "");
   return text ? text[0].toLowerCase() + text.slice(1) : text;
+}
+
+function dataUrlToBuffer(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;,]+);base64,(.+)$/);
+  if (!match) throw new Error("Expected a base64 data URL.");
+  return { mime: match[1], buffer: Buffer.from(match[2], "base64") };
+}
+
+function runCommand(command, args, timeout = 60000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`${path.basename(command)} timed out.`));
+    }, timeout);
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `${path.basename(command)} failed with exit code ${code}.`));
+    });
+  });
+}
+
+function ffmpegText(value, maxLength = 110) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .slice(0, maxLength)
+    .replace(/\\/g, "\\\\")
+    .replace(/:/g, "\\:")
+    .replace(/'/g, "\\'")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]");
+}
+
+function thoughtForReaction(reaction) {
+  return reaction.quote || reaction.reaction || reaction.interpretation || reaction.evidence || "I am scanning this screen and deciding what to do next.";
+}
+
+function pointForStep(index, total) {
+  const points = [
+    { x: 0.2, y: 0.28 },
+    { x: 0.5, y: 0.48 },
+    { x: 0.74, y: 0.58 },
+    { x: 0.34, y: 0.72 },
+  ];
+  return points[index % Math.min(points.length, Math.max(1, total))];
+}
+
+async function generateReplayVideo(test) {
+  if (!existsSync("/usr/local/bin/ffmpeg")) {
+    throw new Error("ffmpeg is required to generate replay video.");
+  }
+  const reactions = (test.reactions || []).slice(0, 8);
+  if (!reactions.length || !test.screenshots?.length) return null;
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-video-"));
+  const font = "/System/Library/Fonts/Supplemental/Arial.ttf";
+  const segments = [];
+
+  try {
+    for (const [index, reaction] of reactions.entries()) {
+      const screen = test.screenshots.find((item) => item.id === reaction.screenshotId) || test.screenshots[0];
+      if (!screen?.url) continue;
+      const { buffer } = dataUrlToBuffer(screen.url);
+      const imagePath = path.join(tempDir, `screen-${index}.png`);
+      const segmentPath = path.join(tempDir, `segment-${index}.mp4`);
+      await writeFile(imagePath, buffer);
+      const point = pointForStep(index, reactions.length);
+      const text = ffmpegText(thoughtForReaction(reaction));
+      const ghost = test.ghosts?.find((item) => item.id === reaction.ghostId);
+      const ghostLabel = ffmpegText(ghost?.name || ghost?.label || `Ghost ${index + 1}`, 40);
+      const cursorX = Math.round(point.x * 1120) + 80;
+      const cursorY = Math.round(point.y * 560) + 40;
+      const filters = [
+        "scale=1120:-2",
+        "pad=1280:720:80:(720-ih)/2:color=0x07040d",
+        "drawbox=x=0:y=0:w=1280:h=720:color=0x140a2e@0.18:t=fill",
+        `drawbox=x=${cursorX - 20}:y=${cursorY - 20}:w=40:h=40:color=0xffffff@0.28:t=fill`,
+        `drawbox=x=${cursorX - 6}:y=${cursorY - 6}:w=12:h=12:color=0xb08cff@0.95:t=fill`,
+        "drawbox=x=54:y=538:w=1172:h=132:color=0x05030a@0.82:t=fill",
+        `drawtext=fontfile='${font}':text='${ghostLabel} thinking aloud':x=82:y=560:fontsize=28:fontcolor=0xe9ddff`,
+        `drawtext=fontfile='${font}':text='${text}':x=82:y=606:fontsize=24:fontcolor=0xffffff`,
+      ].join(",");
+      await runCommand("/usr/local/bin/ffmpeg", [
+        "-y",
+        "-loop",
+        "1",
+        "-i",
+        imagePath,
+        "-t",
+        "4.5",
+        "-vf",
+        filters,
+        "-r",
+        "30",
+        "-pix_fmt",
+        "yuv420p",
+        segmentPath,
+      ]);
+      segments.push(segmentPath);
+    }
+
+    if (!segments.length) return null;
+    const concatPath = path.join(tempDir, "concat.txt");
+    await writeFile(concatPath, segments.map((segment) => `file '${segment.replace(/'/g, "'\\''")}'`).join("\n"));
+    const silentVideoPath = path.join(tempDir, "silent.mp4");
+    await runCommand("/usr/local/bin/ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatPath, "-c", "copy", silentVideoPath]);
+
+    const firstAudio = reactions.map((reaction) => reaction.audioUrl).find(Boolean);
+    const fileName = `${test.id}-ghost-replay.mp4`;
+    const outputPath = path.join(videoDir, fileName);
+    if (firstAudio) {
+      const audioPath = path.join(publicDir, firstAudio.replace(/^\//, ""));
+      await runCommand("/usr/local/bin/ffmpeg", [
+        "-y",
+        "-i",
+        silentVideoPath,
+        "-i",
+        audioPath,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-shortest",
+        outputPath,
+      ]);
+    } else {
+      await runCommand("/usr/local/bin/ffmpeg", ["-y", "-i", silentVideoPath, "-c", "copy", outputPath]);
+    }
+    return `/generated/video/${fileName}`;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 function fallbackAnalysis(test) {
@@ -731,6 +878,12 @@ async function runTest(testId) {
           reaction.audioError = error.message;
         }
       }
+    }
+
+    try {
+      test.videoUrl = await generateReplayVideo(test);
+    } catch (error) {
+      test.videoError = error.message;
     }
 
     test.status = "complete";
