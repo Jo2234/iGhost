@@ -1,6 +1,6 @@
 import http from "node:http";
-import { readFile, writeFile, mkdir, mkdtemp, rm, readdir } from "node:fs/promises";
-import { existsSync, createWriteStream } from "node:fs";
+import { readFile, writeFile, mkdir, mkdtemp, rm, readdir, stat } from "node:fs/promises";
+import { existsSync, createWriteStream, createReadStream } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -12,6 +12,7 @@ const dataDir = path.join(root, "data");
 const dbPath = path.join(dataDir, "db.json");
 const audioDir = path.join(publicDir, "generated", "audio");
 const videoDir = path.join(publicDir, "generated", "video");
+const cursorPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACQ0lEQVR4nO1bO5bDIAyU9FylSJ06F0qxR8k59ihb7IW2dk2xrbfZws/PHwmNwDw8ZSCIGQYZMCa6cOFCz+CSwaZpemrrMvNPbG/+49BJCNcShM9OPFoIboV4lBDcGnG0ENIyeUR8rhD8rqiTSjmBCxHXkIaIYRWCA8l7SLvEsIggDZFXt2tx6EBYRBFfi2HOEy4HTMeqliCvjqd1AVci/9gpG41tJU8+4ILk90h7xcgWYSAf7kHEl/8dFf1I8Bww7Y9+NHlrO/ccHgPF4BHYpjVH5Dlgyh/9CPLa9s0ukIwOlH7chfZPwDus6NF3xVnjNVClTn1/0tfyt9ebPozx3PmAjQ5wz/014g4h9gRImjWBEAYw8pZ6iCknpU54DKSy6mux5MdHFRD23yLzetPvrM4tczq4psFAfphtOCe+/G1LiKhkKBQMr5WjpkIxATSjbylvXoCzQahzSOmAR0kuIwmeW4CXbXkL//8RBkAbY8Y+4KZdByjjZ4NB5wCPiMeZcvS3BNg8IpsvhGSvEAmrlaOsH7UZGpGkQLvBkO2waxqAzwPc9kcLUPJEKGsTpJ4CnJ8HoCe26DhrvCSjHchLyUCY+idbBQcuSBVdALF+9IuRMSAnhAgre4UOF6A7rWnHPPoIByTFi4ix9tvhPbCmUtf3A058Q8RN3vQYVDSWWiMf8RRIBdwAFVoslQ0rxCg3wO8Jck4vur4pOke3d4XPdFvce4gjNYMj4I3PuK50/MXIEt1+M7REt1+NtfTd4IUL1Df+AO3fA5QZtENGAAAAAElFTkSuQmCC";
 
 await mkdir(dataDir, { recursive: true });
 await mkdir(audioDir, { recursive: true });
@@ -249,15 +250,29 @@ async function getClickableElements(cdp) {
   return result.result?.value || [];
 }
 
-async function chooseGhostAction(test, ghost, step, screenshotUrl, elements) {
+async function getPageState(cdp) {
+  const expression = `(() => ({
+    scrollY,
+    innerHeight,
+    scrollHeight: document.documentElement.scrollHeight,
+    canScroll: scrollY + innerHeight < document.documentElement.scrollHeight - 20
+  }))()`;
+  const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true });
+  return result.result?.value || { scrollY: 0, innerHeight: 1100, scrollHeight: 1100, canScroll: false };
+}
+
+async function chooseGhostAction(test, ghost, step, screenshotUrl, elements, pageState, priorActions) {
   const prompt = `You are controlling a browser as a synthetic usability participant.
 
 Product/task: ${test.intendedTask}
 Ghost/persona: ${JSON.stringify(ghost)}
 Step: ${step}
+Page state: ${JSON.stringify(pageState)}
+Prior actions: ${JSON.stringify(priorActions)}
 Clickable elements: ${JSON.stringify(elements)}
 
 Choose one next action that this ghost would actually take. Prefer realistic website actions: click a visible CTA, open a menu, scroll for more context, or stop if the task is blocked.
+For broad discovery tasks, scroll at least once when the page has more content and the ghost has not already scrolled. Use scroll when the current screen does not fully answer the user's instruction.
 
 Return only JSON:
 {"thought":"first-person thought while using the page","action":"click|scroll|stop","targetIndex":number|null,"reason":"short reason"}`;
@@ -285,7 +300,7 @@ async function performGhostAction(cdp, action, elements) {
   if (action.action === "scroll") {
     await cdp.send("Runtime.evaluate", { expression: "window.scrollBy({ top: Math.round(window.innerHeight * 0.75), behavior: 'instant' })" });
     await wait(1000);
-    return { x: 1180, y: 620, label: "Scroll" };
+    return { x: 1180, y: 620, label: "Scroll down" };
   }
   if (action.action === "click") {
     const target = elements.find((item) => item.index === action.targetIndex) || elements[0];
@@ -310,7 +325,8 @@ async function runLiveGhostSession(test, ghost) {
     for (let step = 0; step < 4; step++) {
       const screenshotUrl = await captureCdpScreenshot(session.cdp);
       const elements = await getClickableElements(session.cdp);
-      const action = await chooseGhostAction(test, ghost, step, screenshotUrl, elements);
+      const pageState = await getPageState(session.cdp);
+      const action = await chooseGhostAction(test, ghost, step, screenshotUrl, elements, pageState, steps.map((item) => item.action));
       const cursor = await performGhostAction(session.cdp, action, elements);
       steps.push({
         id: id("live"),
@@ -581,14 +597,15 @@ async function findFfmpegExecutable() {
   throw new Error("A working ffmpeg encoder is required to generate the MP4.");
 }
 
-function ffmpegText(value, maxLength = 110) {
+function ffmpegText(value, maxLength = 82) {
   return String(value || "")
     .replace(/\s+/g, " ")
     .slice(0, maxLength)
     .replace(/\\/g, "\\\\")
     .replace(/:/g, "\\:")
     .replace(/,/g, "\\,")
-    .replace(/'/g, "\\'")
+    .replace(/;/g, "\\;")
+    .replace(/'/g, "")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]");
 }
@@ -605,6 +622,27 @@ function pointForStep(index, total) {
     { x: 0.34, y: 0.72 },
   ];
   return points[index % Math.min(points.length, Math.max(1, total))];
+}
+
+function renderedCursor(step, source, index, total) {
+  const point = step.cursor ? { x: clamp(step.cursor.x / source.width, 0.02, 0.98), y: clamp(step.cursor.y / source.height, 0.02, 0.98) } : pointForStep(index, total);
+  const scale = Math.min(1120 / source.width, 500 / source.height);
+  const displayWidth = Math.round(source.width * scale);
+  const displayHeight = Math.round(source.height * scale);
+  const originX = Math.round((1280 - displayWidth) / 2);
+  const originY = 28;
+  return {
+    x: clamp(Math.round(originX + point.x * displayWidth), 40, 1240),
+    y: clamp(Math.round(originY + point.y * displayHeight), 40, 520),
+  };
+}
+
+function cursorExpression(start, end, axis, offset = 0) {
+  const from = Math.round(start[axis]);
+  const to = Math.round(end[axis]);
+  const delta = to - from;
+  if (!delta) return String(to + offset);
+  return `'if(lt(t\\,1.15)\\,${from}+(${delta})*t/1.15\\,${to})${offset < 0 ? offset : `+${offset}`}'`;
 }
 
 async function generateReplayVideo(test) {
@@ -626,11 +664,13 @@ async function generateReplayVideo(test) {
 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-video-"));
   const font = "/System/Library/Fonts/Supplemental/Arial.ttf";
+  const cursorPath = path.join(tempDir, "cursor.png");
   const segments = [];
   const scriptWords = String(test.walkthroughScript || "").trim().split(/\s+/).filter(Boolean).length;
   const durationPerStep = Math.max(6.5, Math.min(10, scriptWords ? scriptWords / 2.25 / replaySteps.length : 7.5));
 
   try {
+    await writeFile(cursorPath, Buffer.from(cursorPngBase64, "base64"));
     for (const [index, step] of replaySteps.entries()) {
       if (!step.screenshotUrl) continue;
       const { buffer } = dataUrlToBuffer(step.screenshotUrl);
@@ -638,37 +678,37 @@ async function generateReplayVideo(test) {
       const segmentPath = path.join(tempDir, `segment-${index}.mp4`);
       await writeFile(imagePath, buffer);
       const source = pngDimensions(buffer);
-      const scale = Math.min(1120 / source.width, 500 / source.height);
-      const displayWidth = Math.round(source.width * scale);
-      const displayHeight = Math.round(source.height * scale);
-      const originX = Math.round((1280 - displayWidth) / 2);
-      const originY = 28;
-      const point = step.cursor ? { x: clamp(step.cursor.x / source.width, 0.02, 0.98), y: clamp(step.cursor.y / source.height, 0.02, 0.98) } : pointForStep(index, replaySteps.length);
+      const previousSource = index > 0 && replaySteps[index - 1]?.screenshotUrl
+        ? pngDimensions(dataUrlToBuffer(replaySteps[index - 1].screenshotUrl).buffer)
+        : source;
+      const startCursor = index > 0 ? renderedCursor(replaySteps[index - 1], previousSource, index - 1, replaySteps.length) : { x: 640, y: 300 };
+      const endCursor = renderedCursor(step, source, index, replaySteps.length);
       const text = ffmpegText(step.thought);
       const ghost = test.ghosts?.find((item) => item.id === step.ghostId);
       const ghostLabel = ffmpegText(ghost?.name || ghost?.label || `Ghost ${index + 1}`, 40);
-      const cursorX = clamp(Math.round(originX + point.x * displayWidth), 40, 1240);
-      const cursorY = clamp(Math.round(originY + point.y * displayHeight), 40, 520);
+      const cursorX = cursorExpression(startCursor, endCursor, "x", -32);
+      const cursorY = cursorExpression(startCursor, endCursor, "y", -32);
       const filters = [
-        "scale=w=1120:h=500:force_original_aspect_ratio=decrease",
-        "pad=1280:720:(ow-iw)/2:28:color=0x07040d",
-        "drawbox=x=0:y=0:w=1280:h=720:color=0x140a2e@0.18:t=fill",
-        `drawbox=x=${cursorX - 20}:y=${cursorY - 20}:w=40:h=40:color=0xffffff@0.28:t=fill`,
-        `drawbox=x=${cursorX - 6}:y=${cursorY - 6}:w=12:h=12:color=0xb08cff@0.95:t=fill`,
-        "drawbox=x=54:y=538:w=1172:h=132:color=0x05030a@0.82:t=fill",
-        `drawtext=fontfile='${font}':text='${ghostLabel} thinking aloud':x=82:y=560:fontsize=28:fontcolor=0xe9ddff`,
-        `drawtext=fontfile='${font}':text='${text}':x=82:y=606:fontsize=24:fontcolor=0xffffff`,
-      ].join(",");
+        "[0:v]scale=w=1120:h=500:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:28:color=0x07040d,drawbox=x=0:y=0:w=1280:h=720:color=0x140a2e@0.18:t=fill[base]",
+        `[base][1:v]overlay=x=${cursorX}:y=${cursorY}:eval=frame:format=auto[cursor]`,
+        `[cursor]drawbox=x=54:y=538:w=1172:h=132:color=0x05030a@0.82:t=fill,drawtext=fontfile='${font}':text='${ghostLabel} thinking aloud':x=82:y=560:fontsize=28:fontcolor=0xe9ddff,drawtext=fontfile='${font}':text='${text}':x=82:y=606:fontsize=24:fontcolor=0xffffff[v]`,
+      ].join(";");
       await runCommand(ffmpeg, [
         "-y",
         "-loop",
         "1",
         "-i",
         imagePath,
+        "-loop",
+        "1",
+        "-i",
+        cursorPath,
         "-t",
         String(durationPerStep.toFixed(2)),
-        "-vf",
+        "-filter_complex",
         filters,
+        "-map",
+        "[v]",
         "-r",
         "30",
         "-c:v",
@@ -1217,13 +1257,46 @@ const mime = {
   ".mp4": "video/mp4",
 };
 
-async function serveStatic(res, pathname) {
+async function serveStatic(req, res, pathname) {
   const requested = pathname === "/" ? "/index.html" : pathname;
   const safePath = path.normalize(requested).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(publicDir, safePath);
   try {
+    const fileStat = await stat(filePath);
+    const type = mime[path.extname(filePath)] || "application/octet-stream";
+    if (path.extname(filePath) === ".mp4") {
+      const range = req.headers.range;
+      if (range) {
+        const match = range.match(/bytes=(\d*)-(\d*)/);
+        const start = match?.[1] ? Number(match[1]) : 0;
+        const end = match?.[2] ? Math.min(Number(match[2]), fileStat.size - 1) : fileStat.size - 1;
+        if (!match || start >= fileStat.size || end < start) {
+          res.writeHead(416, { "content-range": `bytes */${fileStat.size}` });
+          res.end();
+          return;
+        }
+        res.writeHead(206, {
+          "content-type": type,
+          "content-length": end - start + 1,
+          "content-range": `bytes ${start}-${end}/${fileStat.size}`,
+          "accept-ranges": "bytes",
+        });
+        if (req.method === "HEAD") return res.end();
+        createReadStream(filePath, { start, end }).pipe(res);
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": type,
+        "content-length": fileStat.size,
+        "accept-ranges": "bytes",
+      });
+      if (req.method === "HEAD") return res.end();
+      createReadStream(filePath).pipe(res);
+      return;
+    }
     const body = await readFile(filePath);
-    res.writeHead(200, { "content-type": mime[path.extname(filePath)] || "application/octet-stream" });
+    res.writeHead(200, { "content-type": type, "content-length": body.length });
+    if (req.method === "HEAD") return res.end();
     res.end(body);
   } catch {
     const index = await readFile(path.join(publicDir, "index.html"));
@@ -1238,7 +1311,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith("/api/")) {
       await handleApi(req, res, url.pathname);
     } else {
-      await serveStatic(res, url.pathname);
+      await serveStatic(req, res, url.pathname);
     }
   } catch (error) {
     send(res, 500, { error: error.message || "Server error" });
