@@ -489,7 +489,8 @@ function defaultGhosts(test) {
       patienceInitial: 74,
       skepticism: 45,
       color: "#16a34a",
-      voice: "alloy",
+      voice: "marin",
+      voiceDirection: `Sound like ${name}, a real person thinking out loud rather than narrating. Keep the delivery conversational, specific, and emotionally responsive to the screen. Let this persona shape the rhythm and emphasis: ${profile}`,
     }];
   }
   const profiles = {
@@ -501,6 +502,7 @@ function defaultGhosts(test) {
       skepticism: 45,
       color: "#ff7a59",
       voice: "verse",
+      voiceDirection: "Sound like a fast-moving first-time user who is slightly impatient but not rude. Use clipped, practical phrasing, quick reactions, and a little urgency when the page makes her work too hard.",
     },
     unsure: {
       name: "Nico",
@@ -509,7 +511,8 @@ function defaultGhosts(test) {
       patienceInitial: 82,
       skepticism: 30,
       color: "#16a34a",
-      voice: "alloy",
+      voice: "cedar",
+      voiceDirection: "Sound warm, tentative, and human. Use gentle hesitation, self-checking phrases, and a softer pace when the page feels unclear, like someone trying to avoid making a mistake.",
     },
     skeptical: {
       name: "Ada",
@@ -519,6 +522,7 @@ function defaultGhosts(test) {
       skepticism: 80,
       color: "#45d6c5",
       voice: "sage",
+      voiceDirection: "Sound calm, observant, and analytical, with restrained skepticism. Use measured emphasis when claims need proof, and keep the tone thoughtful rather than performative.",
     },
   };
   const ghost = profiles[test.ghostProfile] || profiles.impatient;
@@ -1006,7 +1010,7 @@ Rules:
       model: TTS_MODEL,
       voice: ghost.voice || "alloy",
       input: script,
-      instructions: `You are ${ghost.name}, ${ghost.archetype}. Speak like the conversational GPT voice mode: alive, human, responsive, and present-tense, as if you are currently using the website and thinking out loud. Do not sound like a narrator reading a script. Use the ghost's personality, natural emphasis, short pauses, and small changes in pace.`,
+      instructions: `You are ${ghost.name}, ${ghost.archetype}. Speak like the conversational GPT voice mode: alive, human, responsive, and present-tense, as if you are currently using the website and thinking out loud. Do not sound like a narrator reading a script. Use natural emphasis, short pauses, small changes in pace, and emotional reactions that match what is happening on screen. ${ghost.voiceDirection || ghost.context || ""}`,
       response_format: "mp3",
     }),
   });
