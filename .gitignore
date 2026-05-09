@@ -1,0 +1,4 @@
+.DS_Store
+.env
+data/db.json
+public/generated/audio/*.mp3
