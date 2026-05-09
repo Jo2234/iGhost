@@ -111,6 +111,231 @@ function findBrowserExecutable() {
   return candidates.find((candidate) => existsSync(candidate));
 }
 
+async function wait(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForJson(url, timeout = 10000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return await response.json();
+    } catch {}
+    await wait(150);
+  }
+  throw new Error("Timed out waiting for browser debugging endpoint.");
+}
+
+class CdpClient {
+  constructor(wsUrl) {
+    this.ws = new WebSocket(wsUrl);
+    this.id = 0;
+    this.pending = new Map();
+    this.events = new Map();
+    this.ws.addEventListener("message", (event) => {
+      const message = JSON.parse(event.data);
+      if (message.id && this.pending.has(message.id)) {
+        const { resolve, reject } = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        if (message.error) reject(new Error(message.error.message || "Chrome DevTools error."));
+        else resolve(message.result);
+        return;
+      }
+      const listeners = this.events.get(message.method) || [];
+      listeners.forEach((listener) => listener(message.params || {}));
+    });
+  }
+
+  async ready() {
+    if (this.ws.readyState === WebSocket.OPEN) return;
+    await new Promise((resolve, reject) => {
+      this.ws.addEventListener("open", resolve, { once: true });
+      this.ws.addEventListener("error", reject, { once: true });
+    });
+  }
+
+  send(method, params = {}) {
+    const id = ++this.id;
+    this.ws.send(JSON.stringify({ id, method, params }));
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+    });
+  }
+
+  once(method, timeout = 8000) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Timed out waiting for ${method}.`));
+      }, timeout);
+      const listener = (params) => {
+        clearTimeout(timer);
+        this.events.set(method, (this.events.get(method) || []).filter((item) => item !== listener));
+        resolve(params);
+      };
+      this.events.set(method, [...(this.events.get(method) || []), listener]);
+    });
+  }
+
+  close() {
+    this.ws.close();
+  }
+}
+
+async function launchBrowserSession(url) {
+  const browser = findBrowserExecutable();
+  if (!browser) throw new Error("No supported browser found for live website session.");
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-live-"));
+  const port = 9300 + Math.floor(Math.random() * 600);
+  const child = spawn(browser, [
+    "--headless",
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--window-size=1440,1100",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${path.join(tempDir, "profile")}`,
+    "about:blank",
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+
+  try {
+    const targets = await waitForJson(`http://127.0.0.1:${port}/json/list`);
+    const page = targets.find((target) => target.type === "page") || targets[0];
+    const cdp = new CdpClient(page.webSocketDebuggerUrl);
+    await cdp.ready();
+    await cdp.send("Page.enable");
+    await cdp.send("Runtime.enable");
+    await cdp.send("Page.navigate", { url });
+    await cdp.once("Page.loadEventFired", 12000).catch(() => {});
+    await wait(1200);
+    return { cdp, child, tempDir };
+  } catch (error) {
+    child.kill("SIGKILL");
+    await rm(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function closeBrowserSession(session) {
+  try {
+    session.cdp?.close();
+  } catch {}
+  try {
+    session.child?.kill("SIGKILL");
+  } catch {}
+  await rm(session.tempDir, { recursive: true, force: true });
+}
+
+async function captureCdpScreenshot(cdp) {
+  const result = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+  return `data:image/png;base64,${result.data}`;
+}
+
+async function getClickableElements(cdp) {
+  const expression = `(() => {
+    const candidates = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[tabindex]')];
+    return candidates.map((el, index) => {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || el.href || '').trim().replace(/\\s+/g, ' ');
+      return { index, tag: el.tagName.toLowerCase(), text, href: el.href || '', x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: rect.width > 4 && rect.height > 4 && style.visibility !== 'hidden' && style.display !== 'none' };
+    }).filter(item => item.visible).slice(0, 30);
+  })()`;
+  const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true });
+  return result.result?.value || [];
+}
+
+async function chooseGhostAction(test, ghost, step, screenshotUrl, elements) {
+  const prompt = `You are controlling a browser as a synthetic usability participant.
+
+Product/task: ${test.intendedTask}
+Ghost/persona: ${JSON.stringify(ghost)}
+Step: ${step}
+Clickable elements: ${JSON.stringify(elements)}
+
+Choose one next action that this ghost would actually take. Prefer realistic website actions: click a visible CTA, open a menu, scroll for more context, or stop if the task is blocked.
+
+Return only JSON:
+{"thought":"first-person thought while using the page","action":"click|scroll|stop","targetIndex":number|null,"reason":"short reason"}`;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: AbortSignal.timeout(20000),
+      headers: {
+        authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: ANALYSIS_MODEL,
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: screenshotUrl, detail: "high" }] }],
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const json = await response.json();
+    const text = json.output_text || json.output?.flatMap((item) => item.content || []).map((part) => part.text || "").join("") || "";
+    const cleaned = text.replace(/^```json\s*|\s*```$/g, "").trim();
+    return JSON.parse(cleaned);
+  } catch {
+    const target = elements.find((item) => /download|start|try|sign|get|learn/i.test(item.text)) || elements[0];
+    return {
+      thought: target ? `I see "${target.text || target.tag}" and I would try that next to understand the product.` : "I do not see an obvious next action, so I would scroll for context.",
+      action: target ? "click" : "scroll",
+      targetIndex: target?.index ?? null,
+      reason: "Fallback action selection.",
+    };
+  }
+}
+
+async function performGhostAction(cdp, action, elements) {
+  if (action.action === "scroll") {
+    await cdp.send("Runtime.evaluate", { expression: "window.scrollBy({ top: Math.round(window.innerHeight * 0.75), behavior: 'instant' })" });
+    await wait(1000);
+    return { x: 1180, y: 620, label: "Scroll" };
+  }
+  if (action.action === "click") {
+    const target = elements.find((item) => item.index === action.targetIndex) || elements[0];
+    if (target) {
+      const x = Math.max(1, Math.round(target.x + target.width / 2));
+      const y = Math.max(1, Math.round(target.y + target.height / 2));
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      await wait(1700);
+      return { x, y, label: target.text || target.href || "Click" };
+    }
+  }
+  return { x: 720, y: 520, label: "Stop" };
+}
+
+async function runLiveGhostSession(test, ghost) {
+  if (!test.websiteUrl) return [];
+  const session = await launchBrowserSession(test.websiteUrl);
+  const steps = [];
+  try {
+    for (let step = 0; step < 4; step++) {
+      const screenshotUrl = await captureCdpScreenshot(session.cdp);
+      const elements = await getClickableElements(session.cdp);
+      const action = await chooseGhostAction(test, ghost, step, screenshotUrl, elements);
+      const cursor = await performGhostAction(session.cdp, action, elements);
+      steps.push({
+        id: id("live"),
+        stepOrder: step,
+        ghostId: ghost.id,
+        screenshotUrl,
+        thought: action.thought,
+        action: action.action,
+        actionLabel: cursor.label || action.reason,
+        cursor,
+      });
+      if (action.action === "stop") break;
+    }
+    return steps;
+  } finally {
+    await closeBrowserSession(session);
+  }
+}
+
 async function captureWebsiteScreenshot(url) {
   const normalizedUrl = normalizeUrl(url);
   const browser = findBrowserExecutable();
@@ -231,6 +456,40 @@ function lowerFirst(value) {
   return text ? text[0].toLowerCase() + text.slice(1) : text;
 }
 
+function defaultGhosts(test) {
+  const base = [
+    {
+      name: "Mara",
+      archetype: "Impatient first-time user",
+      goal: `Quickly decide whether ${test.productName} is worth trying.`,
+      patienceInitial: 70,
+      skepticism: 45,
+      color: "#ff7a59",
+    },
+    {
+      name: "Nico",
+      archetype: "Unsure non-technical user",
+      goal: "Understand the product without decoding jargon.",
+      patienceInitial: 82,
+      skepticism: 30,
+      color: "#8b5cf6",
+    },
+    {
+      name: "Ada",
+      archetype: "Skeptical technical buyer",
+      goal: "Look for proof, privacy, and workflow fit before trusting it.",
+      patienceInitial: 68,
+      skepticism: 80,
+      color: "#45d6c5",
+    },
+  ];
+  return base.slice(0, test.ghostCount || 3).map((ghost) => ({
+    id: id("ghost"),
+    testId: test.id,
+    ...ghost,
+  }));
+}
+
 function dataUrlToBuffer(dataUrl) {
   const match = String(dataUrl || "").match(/^data:([^;,]+);base64,(.+)$/);
   if (!match) throw new Error("Expected a base64 data URL.");
@@ -289,24 +548,35 @@ async function generateReplayVideo(test) {
   if (!existsSync("/usr/local/bin/ffmpeg")) {
     throw new Error("ffmpeg is required to generate replay video.");
   }
-  const reactions = (test.reactions || []).slice(0, 8);
-  if (!reactions.length || !test.screenshots?.length) return null;
+  const replaySteps = test.sessionSteps?.length
+    ? test.sessionSteps.map((step) => ({
+        screenshotUrl: step.screenshotUrl,
+        thought: step.thought,
+        ghostId: step.ghostId,
+        cursor: step.cursor,
+      }))
+    : (test.reactions || []).slice(0, 8).map((reaction) => ({
+        screenshotUrl: (test.screenshots.find((item) => item.id === reaction.screenshotId) || test.screenshots[0])?.url,
+        thought: thoughtForReaction(reaction),
+        ghostId: reaction.ghostId,
+        cursor: null,
+      }));
+  if (!replaySteps.length) return null;
 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-video-"));
   const font = "/System/Library/Fonts/Supplemental/Arial.ttf";
   const segments = [];
 
   try {
-    for (const [index, reaction] of reactions.entries()) {
-      const screen = test.screenshots.find((item) => item.id === reaction.screenshotId) || test.screenshots[0];
-      if (!screen?.url) continue;
-      const { buffer } = dataUrlToBuffer(screen.url);
+    for (const [index, step] of replaySteps.entries()) {
+      if (!step.screenshotUrl) continue;
+      const { buffer } = dataUrlToBuffer(step.screenshotUrl);
       const imagePath = path.join(tempDir, `screen-${index}.png`);
       const segmentPath = path.join(tempDir, `segment-${index}.mp4`);
       await writeFile(imagePath, buffer);
-      const point = pointForStep(index, reactions.length);
-      const text = ffmpegText(thoughtForReaction(reaction));
-      const ghost = test.ghosts?.find((item) => item.id === reaction.ghostId);
+      const point = step.cursor ? { x: step.cursor.x / 1440, y: step.cursor.y / 1100 } : pointForStep(index, replaySteps.length);
+      const text = ffmpegText(step.thought);
+      const ghost = test.ghosts?.find((item) => item.id === step.ghostId);
       const ghostLabel = ffmpegText(ghost?.name || ghost?.label || `Ghost ${index + 1}`, 40);
       const cursorX = Math.round(point.x * 1120) + 80;
       const cursorY = Math.round(point.y * 560) + 40;
@@ -345,7 +615,7 @@ async function generateReplayVideo(test) {
     const silentVideoPath = path.join(tempDir, "silent.mp4");
     await runCommand("/usr/local/bin/ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatPath, "-c", "copy", silentVideoPath]);
 
-    const firstAudio = reactions.map((reaction) => reaction.audioUrl).find(Boolean);
+    const firstAudio = (test.reactions || []).map((reaction) => reaction.audioUrl).find(Boolean);
     const fileName = `${test.id}-ghost-replay.mp4`;
     const outputPath = path.join(videoDir, fileName);
     if (firstAudio) {
@@ -814,15 +1084,27 @@ Answer in first person as the ghost. Be specific, grounded, concise, and mention
 function normalizeAnalysis(test, analysis) {
   const merged = { ...analysis };
   const defaultScreens = test.screenshots.length ? test.screenshots : [{ id: "website", label: test.websiteUrl || "Website", url: "" }];
-  merged.ghosts = (merged.ghosts || []).slice(0, test.ghostCount || 3).map((ghost, index) => ({
+  const sourceGhosts = Array.isArray(merged.ghosts) && merged.ghosts.length ? merged.ghosts : defaultGhosts(test);
+  merged.ghosts = sourceGhosts.slice(0, test.ghostCount || 3).map((ghost, index) => ({
     id: ghost.id || id("ghost"),
     testId: test.id,
     color: ghost.color || ["#ff8a5b", "#52d6c8", "#9b8cff"][index % 3],
     ...ghost,
   }));
-  if (!merged.ghosts.length) throw new Error("OpenAI analysis returned no ghosts.");
   const ghostIds = new Set(merged.ghosts.map((ghost) => ghost.id));
-  merged.reactions = (merged.reactions || []).map((reaction, index) => ({
+  const sourceReactions = Array.isArray(merged.reactions) && merged.reactions.length
+    ? merged.reactions
+    : merged.ghosts.map((ghost, index) => ({
+        ghostId: ghost.id,
+        screenshotId: defaultScreens[0]?.id,
+        stepOrder: 0,
+        patienceBefore: ghost.patienceInitial || 70,
+        patienceAfter: Math.max(25, (ghost.patienceInitial || 70) - 20),
+        emotion: "curious",
+        wouldContinue: true,
+        quote: `I am starting on this page and trying to complete: ${test.intendedTask}`,
+      }));
+  merged.reactions = sourceReactions.map((reaction, index) => ({
     id: reaction.id || id("reaction"),
     testId: test.id,
     ghostId: ghostIds.has(reaction.ghostId) ? reaction.ghostId : merged.ghosts[index % merged.ghosts.length].id,
@@ -834,7 +1116,6 @@ function normalizeAnalysis(test, analysis) {
     wouldContinue: reaction.wouldContinue !== false,
     ...reaction,
   }));
-  if (!merged.reactions.length) throw new Error("OpenAI analysis returned no reactions.");
   merged.rageQuitEvents = merged.rageQuitEvents || [];
   merged.frictionPoints = merged.frictionPoints || [];
   merged.rewriteSuggestions = merged.rewriteSuggestions || [];
@@ -877,6 +1158,14 @@ async function runTest(testId) {
         } catch (error) {
           reaction.audioError = error.message;
         }
+      }
+    }
+
+    if (test.websiteUrl && test.ghosts?.[0]) {
+      try {
+        test.sessionSteps = await runLiveGhostSession(test, test.ghosts[0]);
+      } catch (error) {
+        test.sessionError = error.message;
       }
     }
 

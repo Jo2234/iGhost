@@ -40,7 +40,7 @@ button {
 }
 
 .nav {
-  min-height: 72px;
+  min-height: 60px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -183,7 +183,7 @@ small {
 .output {
   max-width: 1180px;
   margin: 0 auto;
-  padding: clamp(1.5rem, 5vw, 4rem) 1rem;
+  padding: clamp(0.75rem, 3vw, 2rem) 1rem;
 }
 
 .page-head {
@@ -192,7 +192,7 @@ small {
 
 .page-head h1,
 .output-head h1 {
-  font-size: clamp(2.2rem, 5vw, 4.2rem);
+  font-size: clamp(1.8rem, 3.4vw, 2.8rem);
   max-width: 52rem;
 }
 
@@ -368,8 +368,8 @@ textarea:focus {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  align-items: end;
-  margin-bottom: 1rem;
+  align-items: center;
+  margin-bottom: 0.85rem;
 }
 
 .output-actions,
@@ -400,7 +400,7 @@ textarea:focus {
 }
 
 .client-video-maker {
-  padding: 1rem;
+  padding: 0.75rem;
   border-radius: 22px;
   background: rgba(16, 11, 31, 0.78);
   border: 1px solid var(--line);
@@ -409,6 +409,8 @@ textarea:focus {
 
 #replay-canvas {
   width: 100%;
+  max-height: 54vh;
+  object-fit: contain;
   display: block;
   border-radius: 16px;
   background: #05030a;
@@ -418,7 +420,32 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
-  margin-top: 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.session-controls {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.7fr) minmax(13rem, 0.75fr) minmax(18rem, 1.2fr);
+  gap: 0.75rem;
+  align-items: start;
+  margin-top: 0.75rem;
+}
+
+.voice-question {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.5rem;
+}
+
+.voice-question textarea {
+  min-height: 2.8rem;
+  max-height: 5rem;
+  padding: 0.72rem 0.85rem;
+}
+
+.session-controls .interrupt-answer {
+  grid-column: 1 / -1;
+  font-size: 0.95rem;
 }
 
 .stage {
@@ -428,7 +455,7 @@ textarea:focus {
 }
 
 .secondary-stage {
-  opacity: 0.92;
+  display: none;
 }
 
 .viewport {
@@ -556,9 +583,13 @@ audio {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: 1.25fr 0.75fr 1fr;
+  grid-template-columns: 1.2fr 0.8fr 1fr;
   gap: 1rem;
   margin-top: 1rem;
+}
+
+.compact-summary {
+  opacity: 0.9;
 }
 
 .summary-card {
@@ -605,6 +636,7 @@ pre.patch {
   .landing,
   .source-grid,
   .stage,
+  .session-controls,
   .summary-grid {
     grid-template-columns: 1fr;
   }
@@ -612,6 +644,12 @@ pre.patch {
   .output-head {
     align-items: start;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 720px) {
+  .voice-question {
+    grid-template-columns: 1fr;
   }
 }
 

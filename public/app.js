@@ -248,6 +248,19 @@ function reactionText(reaction) {
   return reaction.quote || reaction.reaction || reaction.interpretation || reaction.evidence || "The ghost is forming a first impression.";
 }
 
+function replaySteps(test) {
+  if (test.sessionSteps?.length) return test.sessionSteps;
+  return (test.reactions || []).map((reaction) => {
+    const screen = test.screenshots?.find((item) => item.id === reaction.screenshotId) || test.screenshots?.[0] || {};
+    return {
+      screenshotUrl: screen.url,
+      thought: reactionText(reaction),
+      ghostId: reaction.ghostId,
+      cursor: null,
+    };
+  });
+}
+
 function findingTitle(item) {
   return item.title || item.friction || item.description || item.affectedArea || "Finding";
 }
@@ -265,7 +278,8 @@ function renderOutput(test) {
       <header class="output-head">
         <div>
           <p class="eyebrow">Ghost session replay</p>
-          <h1>Watch ${escapeHtml(ghostName(ghost, activeGhostIndex))} use ${escapeHtml(test.productName || "your flow")}</h1>
+          <h1>${escapeHtml(test.productName || "Product")} usability run</h1>
+          <p class="meta">Watching as ${escapeHtml(ghostName(ghost, activeGhostIndex))} explores the product and thinks out loud.</p>
         </div>
         <div class="output-actions">
           <button class="button" id="download-report">Download report</button>
@@ -279,14 +293,27 @@ function renderOutput(test) {
           <video class="session-video" controls playsinline src="${test.videoUrl}"></video>
         ` : `
           <div class="client-video-maker">
-            <canvas id="replay-canvas" width="1280" height="720"></canvas>
             <div class="video-maker-actions">
-              <button class="button primary" id="record-replay">Generate downloadable replay video</button>
+              <button class="button primary" id="record-replay">Generate video</button>
               <a class="button hidden" id="download-client-video" download="ighost-replay.webm">Download video</a>
             </div>
-            <p class="meta">Local MP4 export is unavailable on this machine, so iGhost can record the replay in-browser as WebM.</p>
+            <canvas id="replay-canvas" width="1280" height="720"></canvas>
           </div>
         `}
+        <div class="session-controls">
+          <div class="ghost-tabs">
+            ${(test.ghosts || []).map((item, index) => `<button class="${item.id === ghost.id ? "active" : ""}" data-ghost-id="${item.id}">${escapeHtml(ghostName(item, index))}</button>`).join("")}
+          </div>
+          <div class="voice-box">
+            ${reaction.audioUrl ? `<audio controls src="${reaction.audioUrl}"></audio><small>Ghost voice</small>` : `<small>Voice was not generated for this reaction.</small>`}
+          </div>
+          <form class="voice-question" id="interrupt-form">
+            <textarea name="question" placeholder="Speak or type a follow-up for this ghost..."></textarea>
+            <button class="button" type="button" id="speak-question">Speak</button>
+            <button class="button primary" type="submit">Ask</button>
+          </form>
+          <div class="interrupt-answer" id="interrupt-answer">${renderFollowups(test, ghost.id)}</div>
+        </div>
       </div>
 
       <div class="stage secondary-stage">
@@ -313,7 +340,7 @@ function renderOutput(test) {
           <div class="voice-box">
             ${reaction.audioUrl ? `<audio controls src="${reaction.audioUrl}"></audio><small>AI-generated OpenAI voice narration</small>` : `<small>Voice was not generated for this reaction.</small>`}
           </div>
-          <form class="interrupt-box" id="interrupt-form">
+          <form class="interrupt-box">
             <label>
               <span>Ask the ghost by voice</span>
               <textarea name="question" placeholder="Press Speak, then ask about something specific on screen..."></textarea>
@@ -334,7 +361,7 @@ function renderOutput(test) {
         </aside>
       </div>
 
-      <section class="summary-grid">
+      <section class="summary-grid compact-summary">
         <div class="summary-card">
           <h2>Top findings</h2>
           ${(test.frictionPoints || []).slice(0, 3).map((item) => `<article><strong>${escapeHtml(findingTitle(item))}</strong><p>${escapeHtml(findingFix(item))}</p></article>`).join("")}
@@ -417,17 +444,16 @@ async function drawReplayCanvas(test, progress = 0) {
   const canvas = app.querySelector("#replay-canvas");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
-  const reactions = test.reactions || [];
-  const step = Math.min(reactions.length - 1, Math.floor(progress / 4500));
+  const steps = replaySteps(test);
+  const step = Math.min(steps.length - 1, Math.floor(progress / 4500));
   const local = (progress % 4500) / 4500;
-  const reaction = reactions[step] || reactions[0] || {};
-  const screen = test.screenshots?.find((item) => item.id === reaction.screenshotId) || test.screenshots?.[0];
-  const ghost = test.ghosts?.find((item) => item.id === reaction.ghostId) || test.ghosts?.[0] || {};
+  const replayStep = steps[step] || steps[0] || {};
+  const ghost = test.ghosts?.find((item) => item.id === replayStep.ghostId) || test.ghosts?.[0] || {};
   ctx.fillStyle = "#06040b";
   ctx.fillRect(0, 0, 1280, 720);
-  if (screen?.url) {
+  if (replayStep.screenshotUrl) {
     try {
-      const image = await loadImage(screen.url);
+      const image = await loadImage(replayStep.screenshotUrl);
       const scale = Math.min(1120 / image.width, 560 / image.height);
       const width = image.width * scale;
       const height = image.height * scale;
@@ -437,8 +463,12 @@ async function drawReplayCanvas(test, progress = 0) {
       ctx.fillRect(80, 30, 1120, 560);
     }
   }
-  const [startX, startY] = cursorPoint(step);
-  const [endX, endY] = cursorPoint(step + 1);
+  const fallbackStart = cursorPoint(step);
+  const fallbackEnd = cursorPoint(step + 1);
+  const startX = replayStep.cursor ? replayStep.cursor.x / 1440 : fallbackStart[0];
+  const startY = replayStep.cursor ? replayStep.cursor.y / 1100 : fallbackStart[1];
+  const endX = steps[step + 1]?.cursor ? steps[step + 1].cursor.x / 1440 : fallbackEnd[0];
+  const endY = steps[step + 1]?.cursor ? steps[step + 1].cursor.y / 1100 : fallbackEnd[1];
   const x = 80 + 1120 * (startX + (endX - startX) * local);
   const y = 30 + 560 * (startY + (endY - startY) * local);
   ctx.fillStyle = "rgba(255,255,255,.28)";
@@ -456,7 +486,7 @@ async function drawReplayCanvas(test, progress = 0) {
   ctx.fillText(`${ghostName(ghost)} thinking aloud`, 82, 580);
   ctx.fillStyle = "#ffffff";
   ctx.font = "24px Arial, sans-serif";
-  wrapCanvasText(ctx, reactionText(reaction), 82, 624, 1080, 31, 2);
+  wrapCanvasText(ctx, replayStep.thought || "I am deciding what to try next.", 82, 624, 1080, 31, 2);
 }
 
 function roundRectCanvas(ctx, x, y, width, height, radius) {
@@ -524,7 +554,7 @@ async function recordClientReplay(test) {
     button.disabled = false;
   };
   recorder.start();
-  const duration = Math.max(4500, (test.reactions?.length || 1) * 4500);
+  const duration = Math.max(4500, replaySteps(test).length * 4500);
   const start = performance.now();
   if (audio) audio.play().catch(() => {});
   async function tick(now) {
