@@ -195,7 +195,7 @@ textarea:focus {
 .ghost-grid {
   margin-top: 0.6rem;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.7rem;
 }
 
@@ -225,6 +225,12 @@ textarea:focus {
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1.4;
+}
+
+.custom-ghost {
+  display: grid;
+  gap: 1rem;
+  padding-top: 0.25rem;
 }
 
 .button {

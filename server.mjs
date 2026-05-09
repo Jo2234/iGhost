@@ -467,6 +467,22 @@ function lowerFirst(value) {
 }
 
 function defaultGhosts(test) {
+  if (test.ghostProfile === "custom" && test.customGhost?.name && test.customGhost?.profile) {
+    const name = String(test.customGhost.name).trim().slice(0, 48);
+    const profile = String(test.customGhost.profile).trim().slice(0, 800);
+    return [{
+      id: id("ghost"),
+      testId: test.id,
+      name,
+      archetype: "Custom user persona",
+      goal: `Complete the assigned task while behaving according to this profile: ${profile}`,
+      context: profile,
+      patienceInitial: 74,
+      skepticism: 45,
+      color: "#16a34a",
+      voice: "alloy",
+    }];
+  }
   const profiles = {
     impatient: {
       name: "Mara",
@@ -909,7 +925,7 @@ ${JSON.stringify({
   name: ghost.name,
   archetype: ghost.archetype,
   profile: test.ghostProfile,
-  personality: personaDirections[test.ghostProfile] || ghost.context,
+  personality: personaDirections[test.ghostProfile] || ghost.context || test.customGhost?.profile,
 }, null, 2)}
 
 Website: ${test.websiteUrl || test.productName || "the website"}
@@ -1229,6 +1245,9 @@ async function handleApi(req, res, pathname) {
     if (!body.intendedTask || (!body.websiteUrl && (!Array.isArray(body.screenshots) || !body.screenshots.length))) {
       return send(res, 400, { error: "Add a website URL or upload at least one screenshot, then tell the ghosts what to test." });
     }
+    if (body.ghostProfile === "custom" && (!body.customGhost?.name || !body.customGhost?.profile)) {
+      return send(res, 400, { error: "Add a name and profile for the custom ghost." });
+    }
     const now = new Date().toISOString();
     const testId = id("test");
     const websiteUrl = body.websiteUrl ? normalizeUrl(body.websiteUrl) : "";
@@ -1247,6 +1266,10 @@ async function handleApi(req, res, pathname) {
       websiteUrl,
       ghostCount: 1,
       ghostProfile: body.ghostProfile || "impatient",
+      customGhost: body.ghostProfile === "custom" ? {
+        name: String(body.customGhost?.name || "").trim().slice(0, 48),
+        profile: String(body.customGhost?.profile || "").trim().slice(0, 800),
+      } : null,
       codeContext: body.codeContext || "",
       status: "draft",
       createdAt: now,

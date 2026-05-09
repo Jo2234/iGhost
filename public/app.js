@@ -19,6 +19,12 @@ const ghosts = [
     label: "Skeptical",
     text: "Looks for proof, platform fit, and trust signals.",
   },
+  {
+    id: "custom",
+    name: "Custom",
+    label: "Your ghost",
+    text: "Describe the person you want iGhost to emulate.",
+  },
 ];
 
 function escapeHtml(value = "") {
@@ -97,12 +103,35 @@ function landing() {
             `).join("")}
           </div>
         </div>
+        <div class="custom-ghost hidden" id="custom-ghost">
+          <label>
+            <span>Custom ghost name</span>
+            <input name="customGhostName" placeholder="Amanda">
+          </label>
+          <label>
+            <span>Who should this ghost behave like?</span>
+            <textarea name="customGhostProfile" placeholder="Amanda is a student at NUS. She likes great deals and checks student discounts before buying."></textarea>
+          </label>
+        </div>
         <button class="button primary large" type="submit">Generate walkthrough</button>
         <div class="status hidden" id="status"></div>
       </form>
     </section>
   `);
-  app.querySelector("#run-form").addEventListener("submit", submitRun);
+  const form = app.querySelector("#run-form");
+  form.addEventListener("submit", submitRun);
+  form.addEventListener("change", toggleCustomGhost);
+  toggleCustomGhost();
+}
+
+function toggleCustomGhost() {
+  const form = app.querySelector("#run-form");
+  const panel = app.querySelector("#custom-ghost");
+  if (!form || !panel) return;
+  const isCustom = form.ghostProfile.value === "custom";
+  panel.classList.toggle("hidden", !isCustom);
+  form.customGhostName.required = isCustom;
+  form.customGhostProfile.required = isCustom;
 }
 
 function setStatus(message, isError = false) {
@@ -119,6 +148,12 @@ async function submitRun(event) {
     intendedTask: form.intendedTask.value.trim(),
     ghostProfile: form.ghostProfile.value,
   };
+  if (payload.ghostProfile === "custom") {
+    payload.customGhost = {
+      name: form.customGhostName.value.trim(),
+      profile: form.customGhostProfile.value.trim(),
+    };
+  }
   setStatus("Opening the website and creating the ghost walkthrough...");
   try {
     const { test } = await api("/api/tests", { method: "POST", body: JSON.stringify(payload) });
