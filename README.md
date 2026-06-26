@@ -2,6 +2,8 @@
 
 **Summon AI users before real users rage-quit.**
 
+AI usability testing that records synthetic user sessions, narrates the failure points, and turns them into actionable product fixes.
+
 iGhost is an AI usability lab for builders who need fast, visceral feedback on a website or product flow. Paste a URL, give the ghost a job, choose the kind of user you want to emulate, and watch a synthetic user try the product in a narrated walkthrough.
 
 Instead of another generic UX report, iGhost produces a playable ghost session: what the user saw, where they hesitated, what confused them, and what to fix next.
@@ -36,7 +38,7 @@ Create a `.env` file:
 
 ```bash
 OPENAI_API_KEY="<your-openai-api-key>"
-OPENAI_ANALYSIS_MODEL="gpt-5.5"
+OPENAI_ANALYSIS_MODEL="<your-preferred-openai-model>"
 OPENAI_TTS_MODEL="gpt-4o-mini-tts"
 PORT=4173
 ```
@@ -57,7 +59,7 @@ http://localhost:4173
 
 iGhost uses OpenAI speech generation for the final MP4 voiceover. The default TTS model is `gpt-4o-mini-tts`, with expressive stage directions passed through the `instructions` field so each ghost sounds like a real person thinking out loud instead of a narrator reading captions.
 
-The reasoning and voiceover script layer should use `gpt-5.5` through `OPENAI_ANALYSIS_MODEL`. That model shapes what the ghost notices, how they interpret the screen, and the personality-specific script that is then performed by the TTS model.
+The reasoning and voiceover script layer uses `OPENAI_ANALYSIS_MODEL`. That model shapes what the ghost notices, how they interpret the screen, and the personality-specific script that is then performed by the TTS model.
 
 ## Routes
 
