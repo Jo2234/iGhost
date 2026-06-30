@@ -85,3 +85,7 @@ Create a Blueprint from this GitHub repo in Render and provide `OPENAI_API_KEY` 
 - Keep `.env` out of Git.
 - Review Codex-generated changes before merging.
 - Do not include private screenshots, API keys, or local data in public reports or GitHub issues.
+- Public website URLs are validated before outbound fetches or browser capture. Localhost, private-network, link-local, reserved IP ranges, non-http schemes, and credentialed URLs are blocked to reduce SSRF risk.
+- JSON API bodies are capped at 1 MB by default and API calls have a basic per-client rate limit. Tune with `IGHOST_RATE_LIMIT_MAX` and `IGHOST_RATE_LIMIT_WINDOW_MS`.
+
+See `SECURITY_HARDENING_DEMO.md` for demo-ready validation examples and test coverage notes.

@@ -5,6 +5,13 @@ import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import {
+  createRateLimiter,
+  getClientIp,
+  parseJsonBody,
+  RequestValidationError,
+  validatePublicUrl,
+} from "./lib/security.mjs";
 
 const root = process.cwd();
 const publicDir = path.join(root, "public");
@@ -24,6 +31,10 @@ await loadEnvFile();
 const PORT = Number(process.env.PORT || 4173);
 const ANALYSIS_MODEL = process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.5";
 const TTS_MODEL = process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
+const apiRateLimit = createRateLimiter({
+  windowMs: Number(process.env.IGHOST_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.IGHOST_RATE_LIMIT_MAX || 60),
+});
 
 async function loadEnvFile() {
   const envPath = path.join(root, ".env");
@@ -69,13 +80,6 @@ function id(prefix) {
   return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
-async function parseJson(req) {
-  let raw = "";
-  for await (const chunk of req) raw += chunk;
-  if (!raw) return {};
-  return JSON.parse(raw);
-}
-
 function requireOpenAiKey() {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is required. Add it to .env and restart the server.");
@@ -84,17 +88,6 @@ function requireOpenAiKey() {
 
 function extractOutputText(json) {
   return json.output_text || json.output?.flatMap((item) => item.content || []).map((part) => part.text || "").join("") || "";
-}
-
-function normalizeUrl(rawUrl) {
-  const value = String(rawUrl || "").trim();
-  if (!value) return "";
-  const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
-  const parsed = new URL(withScheme);
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("Website URL must start with http or https.");
-  }
-  return parsed.toString();
 }
 
 function safeSlug(text) {
@@ -193,6 +186,7 @@ class CdpClient {
 }
 
 async function launchBrowserSession(url) {
+  const safeUrl = await validatePublicUrl(url);
   const browser = findBrowserExecutable();
   if (!browser) throw new Error("No supported browser found for live website session.");
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-live-"));
@@ -217,7 +211,7 @@ async function launchBrowserSession(url) {
     await cdp.ready();
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
-    await cdp.send("Page.navigate", { url });
+    await cdp.send("Page.navigate", { url: safeUrl });
     await cdp.once("Page.loadEventFired", 12000).catch(() => {});
     await wait(1200);
     return { cdp, child, tempDir };
@@ -354,7 +348,7 @@ async function runLiveGhostSession(test, ghost) {
 }
 
 async function captureWebsiteScreenshot(url) {
-  const normalizedUrl = normalizeUrl(url);
+  const normalizedUrl = await validatePublicUrl(url);
   const browser = findBrowserExecutable();
   if (!browser) {
     throw new Error("No supported browser found for website capture. Install Chrome, Brave, Edge, or Chromium.");
@@ -443,7 +437,8 @@ async function buildScreenshots(body, testId) {
 async function fetchWebsiteContext(url) {
   if (!url) return "";
   try {
-    const response = await fetch(url, {
+    const safeUrl = await validatePublicUrl(url);
+    const response = await fetch(safeUrl, {
       signal: AbortSignal.timeout(10000),
       headers: {
         "user-agent": "iGhost usability test bot",
@@ -455,7 +450,7 @@ async function fetchWebsiteContext(url) {
     const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "";
     const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
     return [
-      `URL: ${url}`,
+      `URL: ${safeUrl}`,
       title && `Title: ${title}`,
       description && `Description: ${description}`,
       h1 && `Primary heading: ${h1}`,
@@ -1427,7 +1422,7 @@ async function runTest(testId) {
 
 async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/tests") {
-    const body = await parseJson(req);
+    const body = await parseJsonBody(req);
     if (!process.env.OPENAI_API_KEY) {
       return send(res, 400, { error: "OPENAI_API_KEY is required. Add it to .env and restart the server." });
     }
@@ -1439,7 +1434,12 @@ async function handleApi(req, res, pathname) {
     }
     const now = new Date().toISOString();
     const testId = id("test");
-    const websiteUrl = body.websiteUrl ? normalizeUrl(body.websiteUrl) : "";
+    let websiteUrl = "";
+    try {
+      websiteUrl = body.websiteUrl ? await validatePublicUrl(body.websiteUrl) : "";
+    } catch (error) {
+      return send(res, error.statusCode || 400, { error: error.message });
+    }
     let screenshots;
     try {
       screenshots = await buildScreenshots({ ...body, websiteUrl }, testId);
@@ -1484,7 +1484,7 @@ async function handleApi(req, res, pathname) {
 
   const askMatch = pathname.match(/^\/api\/tests\/([^/]+)\/ask$/);
   if (req.method === "POST" && askMatch) {
-    const body = await parseJson(req);
+    const body = await parseJsonBody(req);
     if (!body.question) return send(res, 400, { error: "Question is required." });
     const db = await loadDb();
     const test = db.tests[askMatch[1]];
@@ -1502,7 +1502,7 @@ async function handleApi(req, res, pathname) {
 
   const patchMatch = pathname.match(/^\/api\/tests\/([^/]+)\/codex-patch$/);
   if (req.method === "POST" && patchMatch) {
-    const body = await parseJson(req);
+    const body = await parseJsonBody(req);
     const db = await loadDb();
     const test = db.tests[patchMatch[1]];
     if (!test) return send(res, 404, { error: "Test not found" });
@@ -1518,7 +1518,7 @@ async function handleApi(req, res, pathname) {
 
   const sendPatchMatch = pathname.match(/^\/api\/tests\/([^/]+)\/codex-patch\/send$/);
   if (req.method === "POST" && sendPatchMatch) {
-    const body = await parseJson(req);
+    const body = await parseJsonBody(req);
     const db = await loadDb();
     const test = db.tests[sendPatchMatch[1]];
     if (!test) return send(res, 404, { error: "Test not found" });
@@ -1647,11 +1647,18 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { status: "ok" });
     }
     if (url.pathname.startsWith("/api/")) {
+      const limit = apiRateLimit(getClientIp(req));
+      if (!limit.allowed) {
+        return send(res, 429, { error: "Too many API requests. Please retry shortly." }, { "retry-after": String(limit.retryAfter) });
+      }
       await handleApi(req, res, url.pathname);
     } else {
       await serveStatic(req, res, url.pathname);
     }
   } catch (error) {
+    if (error instanceof RequestValidationError) {
+      return send(res, error.statusCode || 400, { error: error.message });
+    }
     send(res, 500, { error: error.message || "Server error" });
   }
 });
