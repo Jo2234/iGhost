@@ -13,9 +13,11 @@ WORKDIR /app
 
 COPY package.json ./
 COPY server.mjs ./
+COPY lib ./lib
 COPY public ./public
 
 ENV NODE_ENV=production
+ENV IGHOST_BIND_HOST=0.0.0.0
 ENV CHROME_PATH=/usr/bin/chromium
 ENV IGHOST_DATA_DIR=/data/data
 ENV IGHOST_GENERATED_DIR=/data/generated

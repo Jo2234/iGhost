@@ -1,6 +1,6 @@
 .DS_Store
 .env
 .vendor/
-data/db.json
+data/
 public/generated/audio/*.mp3
 public/generated/video/*.mp4

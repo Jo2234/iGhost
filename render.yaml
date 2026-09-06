@@ -13,6 +13,8 @@ services:
       mountPath: /data
       sizeGB: 5
     envVars:
+      - key: IGHOST_ACCESS_TOKEN
+        generateValue: true
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_ANALYSIS_MODEL
