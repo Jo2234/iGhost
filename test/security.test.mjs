@@ -7,6 +7,9 @@ import {
   normalizeUrl,
   parseJsonBody,
   validatePublicUrl,
+  resolvePublicUrl,
+  isPublicAddress,
+  getClientIp,
 } from "../lib/security.mjs";
 
 function jsonRequest(payload, headers = {}) {
@@ -19,6 +22,23 @@ function jsonRequest(payload, headers = {}) {
 test("normalizeUrl preserves public http/https URLs and adds https by default", () => {
   assert.equal(normalizeUrl("example.com/path?q=1#secret"), "https://example.com/path?q=1");
   assert.equal(normalizeUrl("http://example.com/"), "http://example.com/");
+});
+
+test("IPv6 classification handles mapped and full link-local CIDRs", async () => {
+  for (const address of ["::ffff:127.0.0.1", "::ffff:7f00:1", "0:0:0:0:0:ffff:a00:1", "fe81::1", "fe8f::1", "febf::1", "ff02::1", "2001:db8::1", "2002:7f00:1::"]) {
+    assert.equal(isPublicAddress(address), false, address);
+    assert.throws(() => normalizeUrl(`http://[${address}]/`));
+  }
+  assert.equal(isPublicAddress("2606:4700:4700::1111"), true);
+  assert.equal(isPublicAddress("::ffff:93.184.216.34"), true);
+  await assert.rejects(validatePublicUrl("https://example.test", { lookup: async () => [{ address: "::ffff:7f00:1" }] }));
+  assert.deepEqual(await resolvePublicUrl("https://example.test", { lookup: async () => [{ address: "93.184.216.34" }] }), {
+    url: "https://example.test/", address: "93.184.216.34", family: 4,
+  });
+});
+
+test("forwarded headers cannot select a new rate-limit identity", () => {
+  assert.equal(getClientIp({ headers: { "x-forwarded-for": "spoofed" }, socket: { remoteAddress: "127.0.0.1" } }), "127.0.0.1");
 });
 
 test("normalizeUrl rejects private, localhost, non-http, and credentialed targets", () => {

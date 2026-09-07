@@ -38,10 +38,15 @@ Create a `.env` file:
 
 ```bash
 OPENAI_API_KEY="<your-openai-api-key>"
+IGHOST_ACCESS_TOKEN="<a-random-owner-token-at-least-24-characters>"
 OPENAI_ANALYSIS_MODEL="<your-preferred-openai-model>"
 OPENAI_TTS_MODEL="gpt-4o-mini-tts"
 PORT=4173
 ```
+
+Generate the owner token with `openssl rand -hex 32`, save it in `.env`, then enter it on the sign-in screen. Startup refuses a missing or short token. This is a **single-owner lab**: private APIs and generated media require an owner session (HttpOnly, SameSite=Strict, eight hours) or `Authorization: Bearer <owner-token>` for scripts. Browser mutations also require a matching Origin. Restarting expires browser sessions.
+
+Local runs bind to `127.0.0.1` by default. Set `IGHOST_BIND_HOST=0.0.0.0` only when intentionally serving other machines; Docker sets this for Render. Production uses Secure cookies and must sit behind HTTPS.
 
 Run the app:
 
@@ -68,24 +73,50 @@ The reasoning and voiceover script layer uses `OPENAI_ANALYSIS_MODEL`. That mode
 - `/api/tests/:testId/codex-patch` - create a Codex-ready patch request
 - `/api/tests/:testId/codex-patch/send` - create a GitHub issue that tags `@codex` with the patch request
 
+GitHub delivery is disabled until `IGHOST_REPO_URL` names the one authorized repository and `IGHOST_GITHUB_TOKEN` (or `GITHUB_TOKEN`) provides a repository-scoped token with issue-write permission. The app does not read your local `gh` login. The send button reports success only after GitHub confirms an issue; issue creation does not guarantee Codex implementation. Repeated sends reuse an existing issue, including after regenerating its prompt.
+
+Reports are private by default. The owner can `POST /api/tests/:testId/report` with `{"isPublic":true}` to share its redacted JSON view, or `false` to revoke it. Shared reports expose only display fields, advice, ghost names and a report-scoped video link. They omit code context, uploaded screenshots, private persona details, follow-ups and patch prompts. Existing public reports remain public during migration and can be revoked with the same endpoint.
+
 ## Website Capture
 
 When a user enters a website URL, iGhost launches a local browser, captures screenshots while the ghost navigates, and sends those screenshots to OpenAI vision along with the user's task prompt.
 
 Set `CHROME_PATH` if your browser is not in a standard location.
 
+Screenshots and walkthroughs use one isolated browser setup. Every session has a loopback egress proxy that validates all DNS answers and connects to the chosen public IP without resolving the hostname again. HTTP, HTTPS CONNECT and WebSocket upgrades use this boundary, including redirects and subresources. Chromium's implicit loopback bypass, QUIC and non-proxied WebRTC UDP are disabled. Private, link-local, mapped-private and special-use addresses fail closed.
+
+This is browser network policy, not an operating-system sandbox against a compromised browser. Keep Chromium updated and isolate the deployment from sensitive workloads.
+
+## Saved Data
+
+Legacy `data/db.json` migrates automatically to individual `tests/*.json` and `reports/*.json` records. The original file is kept unchanged as a backup. Updates use a short write queue and atomic replacement; malformed JSON fails loudly. Generation saves completed stages, joins duplicate in-flight runs and reuses successful assets on retry. Use **one server process per data directory**; multiple replicas sharing this JSON store require a transactional database first. Back up the whole data directory and generated media together.
+
 ## Render Deployment
 
 The repo includes a Dockerfile and `render.yaml` Blueprint for Render. The container installs Chromium and ffmpeg, stores local data under the attached `/data` disk, and exposes `/health` for Render health checks.
 
-Create a Blueprint from this GitHub repo in Render and provide `OPENAI_API_KEY` when prompted. The Blueprint uses the `starter` plan because browser capture and MP4 rendering need more headroom than a static/free deployment.
+Create a Blueprint from this GitHub repo in Render and provide `OPENAI_API_KEY` when prompted. Render generates `IGHOST_ACCESS_TOKEN`; retrieve it from the service environment settings for sign-in. Configure repository/token variables separately for GitHub delivery. The Blueprint uses the `starter` plan because browser capture and MP4 rendering need more headroom than a static/free deployment.
+
+The image includes all `lib/` modules. `IGHOST_GENERATED_DIR` controls both where assets are written and where the encoder reads narration; public `/generated/...` URLs are independent of internal paths.
+
+## Checks
+
+Run `npm run check` and `npm test`. Tests use synthetic data and mocked service boundaries; no real issue is sent. The MP4 smoke test runs when a local ffmpeg executable is available. To exercise Chromium against synthetic sites too:
+
+```bash
+IGHOST_TEST_BROWSER="/path/to/chromium" npm test
+```
+
+The browser test uses a fresh temporary profile, denies all destinations except its local fixture through the test proxy, verifies loopback redirects/subresources stay blocked, then stops its process group.
 
 ## Safety Notes
 
 - Keep `.env` out of Git.
 - Review Codex-generated changes before merging.
 - Do not include private screenshots, API keys, or local data in public reports or GitHub issues.
-- Public website URLs are validated before outbound fetches or browser capture. Localhost, private-network, link-local, reserved IP ranges, non-http schemes, and credentialed URLs are blocked to reduce SSRF risk.
+- Website network access is enforced by the browser egress proxy as well as URL validation; initial URL validation alone is not the boundary.
 - JSON API bodies are capped at 1 MB by default and API calls have a basic per-client rate limit. Tune with `IGHOST_RATE_LIMIT_MAX` and `IGHOST_RATE_LIMIT_WINDOW_MS`.
+
+Rate limits use the direct peer IP instead of caller-controlled forwarding headers. Behind a reverse proxy, clients share that peer limit; owner authentication remains the access boundary.
 
 See `SECURITY_HARDENING_DEMO.md` for demo-ready validation examples and test coverage notes.

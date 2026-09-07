@@ -1,10 +1,16 @@
 import http from "node:http";
+import { fileURLToPath } from "node:url";
+import { Store, singleFlight } from "./lib/store.mjs";
+import { createOwnerAuth, publicTestView } from "./lib/auth.mjs";
+import { createEgressProxy, browserEgressArguments, prepareBrowserProfile } from "./lib/egress.mjs";
+import { generatedMediaPath } from "./lib/media.mjs";
 import { readFile, writeFile, mkdir, mkdtemp, rm, readdir, stat } from "node:fs/promises";
 import { existsSync, createWriteStream, createReadStream } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import { pipeline } from "node:stream/promises";
 import {
   createRateLimiter,
   getClientIp,
@@ -13,10 +19,14 @@ import {
   validatePublicUrl,
 } from "./lib/security.mjs";
 
-const root = process.cwd();
+const root = path.dirname(fileURLToPath(import.meta.url));
+await loadEnvFile();
 const publicDir = path.join(root, "public");
 const dataDir = process.env.IGHOST_DATA_DIR || path.join(root, "data");
-const dbPath = path.join(dataDir, "db.json");
+const store = new Store(dataDir);
+await store.initialize();
+const runOnce = singleFlight();
+const sendOnce = singleFlight();
 const generatedDir = process.env.IGHOST_GENERATED_DIR || path.join(publicDir, "generated");
 const audioDir = path.join(generatedDir, "audio");
 const videoDir = path.join(generatedDir, "video");
@@ -26,9 +36,9 @@ await mkdir(dataDir, { recursive: true });
 await mkdir(audioDir, { recursive: true });
 await mkdir(videoDir, { recursive: true });
 
-await loadEnvFile();
-
 const PORT = Number(process.env.PORT || 4173);
+const BIND_HOST = process.env.IGHOST_BIND_HOST || "127.0.0.1";
+const ownerAuth = createOwnerAuth(process.env.IGHOST_ACCESS_TOKEN, { secureCookies: process.env.NODE_ENV === "production" });
 const ANALYSIS_MODEL = process.env.OPENAI_ANALYSIS_MODEL || "gpt-5.5";
 const TTS_MODEL = process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
 const apiRateLimit = createRateLimiter({
@@ -50,21 +60,6 @@ async function loadEnvFile() {
       process.env[key] = value;
     }
   }
-}
-
-async function loadDb() {
-  if (!existsSync(dbPath)) {
-    return { tests: {}, reports: {} };
-  }
-  try {
-    return JSON.parse(await readFile(dbPath, "utf8"));
-  } catch {
-    return { tests: {}, reports: {} };
-  }
-}
-
-async function saveDb(db) {
-  await writeFile(dbPath, JSON.stringify(db, null, 2));
 }
 
 function send(res, status, body, headers = {}) {
@@ -122,12 +117,32 @@ async function waitForJson(url, timeout = 10000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(1000) });
       if (response.ok) return await response.json();
     } catch {}
     await wait(150);
   }
   throw new Error("Timed out waiting for browser debugging endpoint.");
+}
+
+async function browserDebugPort(profile, child) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode) throw new Error("Browser exited before its debugging endpoint was ready.");
+    try {
+      const port = Number((await readFile(path.join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]);
+      if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+    } catch {}
+    await wait(100);
+  }
+  throw new Error("Timed out starting an isolated browser.");
+}
+
+function killBrowser(child) {
+  try {
+    if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+    else child.kill("SIGKILL");
+  } catch {}
 }
 
 class CdpClient {
@@ -139,7 +154,8 @@ class CdpClient {
     this.ws.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (message.id && this.pending.has(message.id)) {
-        const { resolve, reject } = this.pending.get(message.id);
+        const { resolve, reject, timer } = this.pending.get(message.id);
+        clearTimeout(timer);
         this.pending.delete(message.id);
         if (message.error) reject(new Error(message.error.message || "Chrome DevTools error."));
         else resolve(message.result);
@@ -160,15 +176,21 @@ class CdpClient {
 
   send(method, params = {}) {
     const id = ++this.id;
-    this.ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Browser command timed out: ${method}.`));
+      }, 12000);
+      this.pending.set(id, { resolve, reject, timer });
+      try { this.ws.send(JSON.stringify({ id, method, params })); }
+      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
   }
 
   once(method, timeout = 8000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
+        this.events.set(method, (this.events.get(method) || []).filter(item => item !== listener));
         reject(new Error(`Timed out waiting for ${method}.`));
       }, timeout);
       const listener = (params) => {
@@ -181,6 +203,11 @@ class CdpClient {
   }
 
   close() {
+    for (const { reject, timer } of this.pending.values()) {
+      clearTimeout(timer);
+      reject(new Error("Browser session closed."));
+    }
+    this.pending.clear();
     this.ws.close();
   }
 }
@@ -190,8 +217,11 @@ async function launchBrowserSession(url) {
   const browser = findBrowserExecutable();
   if (!browser) throw new Error("No supported browser found for live website session.");
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-live-"));
-  const port = 9300 + Math.floor(Math.random() * 600);
+  const profile = path.join(tempDir, "profile");
+  await prepareBrowserProfile(profile);
+  const proxy = await createEgressProxy();
   const child = spawn(browser, [
+    ...browserEgressArguments(proxy.url),
     "--headless",
     "--disable-gpu",
     "--no-sandbox",
@@ -199,35 +229,43 @@ async function launchBrowserSession(url) {
     "--no-first-run",
     "--no-default-browser-check",
     "--window-size=1440,1100",
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${path.join(tempDir, "profile")}`,
+    "--remote-debugging-port=0",
+    "--remote-debugging-address=127.0.0.1",
+    `--user-data-dir=${profile}`,
     "about:blank",
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+  ], { stdio: "ignore", detached: process.platform !== "win32" });
+  let spawnError;
+  child.once("error", error => { spawnError = error; });
 
   try {
+    const port = await browserDebugPort(profile, child);
     const targets = await waitForJson(`http://127.0.0.1:${port}/json/list`);
     const page = targets.find((target) => target.type === "page") || targets[0];
     const cdp = new CdpClient(page.webSocketDebuggerUrl);
     await cdp.ready();
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
-    await cdp.send("Page.navigate", { url: safeUrl });
-    await cdp.once("Page.loadEventFired", 12000).catch(() => {});
+    const loaded = cdp.once("Page.loadEventFired", 12000).catch(() => {});
+    const navigation = await cdp.send("Page.navigate", { url: safeUrl });
+    if (navigation.errorText) throw new Error(`Website navigation failed: ${navigation.errorText}`);
+    await loaded;
     await wait(1200);
-    return { cdp, child, tempDir };
+    return { cdp, child, tempDir, proxy };
   } catch (error) {
-    child.kill("SIGKILL");
+    await proxy.close();
+    killBrowser(child);
     await rm(tempDir, { recursive: true, force: true });
-    throw error;
+    throw spawnError || error;
   }
 }
 
 async function closeBrowserSession(session) {
+  await session.proxy?.close();
   try {
     session.cdp?.close();
   } catch {}
   try {
-    session.child?.kill("SIGKILL");
+    if (session.child) killBrowser(session.child);
   } catch {}
   await rm(session.tempDir, { recursive: true, force: true });
 }
@@ -349,59 +387,16 @@ async function runLiveGhostSession(test, ghost) {
 
 async function captureWebsiteScreenshot(url) {
   const normalizedUrl = await validatePublicUrl(url);
-  const browser = findBrowserExecutable();
-  if (!browser) {
-    throw new Error("No supported browser found for website capture. Install Chrome, Brave, Edge, or Chromium.");
-  }
-
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-capture-"));
-  const screenshotPath = path.join(tempDir, "capture.png");
-  const args = [
-    "--headless",
-    "--disable-gpu",
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-    "--hide-scrollbars",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--window-size=1440,1100",
-    `--screenshot=${screenshotPath}`,
-    normalizedUrl,
-  ];
-
+  const session = await launchBrowserSession(normalizedUrl);
   try {
-    await new Promise((resolve, reject) => {
-      const child = spawn(browser, args, { stdio: ["ignore", "pipe", "pipe"] });
-      let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        reject(new Error("Website capture timed out."));
-      }, 30000);
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (code === 0 && existsSync(screenshotPath)) {
-          resolve();
-        } else {
-          reject(new Error(stderr.trim() || `Browser capture failed with exit code ${code}.`));
-        }
-      });
-    });
-    const image = await readFile(screenshotPath);
     return {
-      url: `data:image/png;base64,${image.toString("base64")}`,
+      url: await captureCdpScreenshot(session.cdp),
       label: new URL(normalizedUrl).hostname,
       capturedUrl: normalizedUrl,
       capturedAt: new Date().toISOString(),
     };
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await closeBrowserSession(session);
   }
 }
 
@@ -434,40 +429,8 @@ async function buildScreenshots(body, testId) {
   return screenshots;
 }
 
-async function fetchWebsiteContext(url) {
-  if (!url) return "";
-  try {
-    const safeUrl = await validatePublicUrl(url);
-    const response = await fetch(safeUrl, {
-      signal: AbortSignal.timeout(10000),
-      headers: {
-        "user-agent": "iGhost usability test bot",
-      },
-    });
-    const html = await response.text();
-    const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || "";
-    const description = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)?.[1]?.trim() || "";
-    const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "";
-    const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    return [
-      `URL: ${safeUrl}`,
-      title && `Title: ${title}`,
-      description && `Description: ${description}`,
-      h1 && `Primary heading: ${h1}`,
-      `Visible text excerpt: ${text.slice(0, 5000)}`,
-    ].filter(Boolean).join("\n");
-  } catch (error) {
-    return `URL: ${url}\nWebsite fetch failed: ${error.message}`;
-  }
-}
-
 function clamp(value, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
-}
-
-function lowerFirst(value) {
-  const text = String(value || "");
-  return text ? text[0].toLowerCase() + text.slice(1) : text;
 }
 
 function defaultGhosts(test) {
@@ -557,33 +520,6 @@ function runCommand(command, args, timeout = 60000) {
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve();
-      else reject(new Error(stderr.trim() || `${path.basename(command)} failed with exit code ${code}.`));
-    });
-  });
-}
-
-function runCommandCapture(command, args, timeout = 60000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`${path.basename(command)} timed out.`));
-    }, timeout);
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(stdout.trim());
       else reject(new Error(stderr.trim() || `${path.basename(command)} failed with exit code ${code}.`));
     });
   });
@@ -717,7 +653,12 @@ async function generateReplayVideo(test) {
   if (!replaySteps.length) return null;
 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ighost-video-"));
-  const font = "/System/Library/Fonts/Supplemental/Arial.ttf";
+  const font = [
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+  ].find(candidate => existsSync(candidate));
+  const fontOption = font ? `fontfile='${font}'` : "font='Sans'";
   const cursorPath = path.join(tempDir, "cursor.png");
   const segments = [];
   const scriptWords = String(test.walkthroughScript || "").trim().split(/\s+/).filter(Boolean).length;
@@ -745,7 +686,7 @@ async function generateReplayVideo(test) {
       const filters = [
         "[0:v]scale=w=1120:h=500:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:28:color=0x030503,drawbox=x=0:y=0:w=1280:h=720:color=0x061009@0.2:t=fill[base]",
         `[base][1:v]overlay=x=${cursorX}:y=${cursorY}:eval=frame:format=auto[cursor]`,
-        `[cursor]drawbox=x=54:y=538:w=1172:h=132:color=0x020402@0.86:t=fill,drawbox=x=54:y=538:w=1172:h=2:color=0x31d66b@0.9:t=fill,drawtext=fontfile='${font}':text='${ghostLabel} thinking aloud':x=82:y=560:fontsize=28:fontcolor=0x54f084,drawtext=fontfile='${font}':text='${text}':x=82:y=606:fontsize=24:fontcolor=0xf5fff6[v]`,
+        `[cursor]drawbox=x=54:y=538:w=1172:h=132:color=0x020402@0.86:t=fill,drawbox=x=54:y=538:w=1172:h=2:color=0x31d66b@0.9:t=fill,drawtext=${fontOption}:text='${ghostLabel} thinking aloud':x=82:y=560:fontsize=28:fontcolor=0x54f084,drawtext=${fontOption}:text='${text}':x=82:y=606:fontsize=24:fontcolor=0xf5fff6[v]`,
       ].join(";");
       await runCommand(ffmpeg, [
         "-y",
@@ -786,7 +727,7 @@ async function generateReplayVideo(test) {
     const fileName = `${test.id}-ghost-replay.mp4`;
     const outputPath = path.join(videoDir, fileName);
     if (firstAudio) {
-      const audioPath = path.join(publicDir, firstAudio.replace(/^\//, ""));
+      const audioPath = generatedMediaPath(generatedDir, firstAudio);
       await runCommand(ffmpeg, [
         "-y",
         "-i",
@@ -812,135 +753,6 @@ async function generateReplayVideo(test) {
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
-}
-
-function schemaForAnalysis() {
-  return {
-    type: "object",
-    additionalProperties: false,
-    required: [
-      "productUnderstanding",
-      "ghosts",
-      "reactions",
-      "rageQuitEvents",
-      "frictionPoints",
-      "rewriteSuggestions",
-      "layoutSuggestions",
-      "annotatedScreenshot",
-      "codexPatch",
-    ],
-    properties: {
-      productUnderstanding: { type: "object", additionalProperties: true },
-      ghosts: { type: "array", items: { type: "object", additionalProperties: true } },
-      reactions: { type: "array", items: { type: "object", additionalProperties: true } },
-      rageQuitEvents: { type: "array", items: { type: "object", additionalProperties: true } },
-      frictionPoints: { type: "array", items: { type: "object", additionalProperties: true } },
-      rewriteSuggestions: { type: "array", items: { type: "object", additionalProperties: true } },
-      layoutSuggestions: { type: "array", items: { type: "object", additionalProperties: true } },
-      annotatedScreenshot: { type: "object", additionalProperties: true },
-      codexPatch: { type: "object", additionalProperties: true },
-    },
-  };
-}
-
-async function callOpenAiAnalysis(test) {
-  requireOpenAiKey();
-  const ghostCount = Math.max(1, Math.min(3, Number(test.ghostCount || 3)));
-  const websiteContext = await fetchWebsiteContext(test.websiteUrl);
-
-  const prompt = `You are iGhost, an AI usability testing system. Simulate realistic synthetic users attempting a task on a product flow.
-
-Stay grounded in screenshots and product context. Avoid generic UX advice. Every finding must include affected screenshot, affected ghost, task impact, concrete evidence, and a specific fix.
-
-Return JSON matching this product shape:
-- productUnderstanding
-- exactly ${ghostCount} ghosts
-- reactions for each ghost across the screenshots
-- at least one plausible rageQuitEvent when a ghost fails
-- frictionPoints
-- rewriteSuggestions
-- layoutSuggestions
-- annotatedScreenshot with coordinates from 0 to 1
-- codexPatch with a human-readable diff or implementation instructions.
-
-Product name: ${test.productName}
-Description: ${test.productDescription}
-Target user: ${test.targetUser || "Not specified"}
-Intended task: ${test.intendedTask}
-Website URL: ${test.websiteUrl || "No URL provided"}
-Website context: ${websiteContext || "No website context available."}
-Code context: ${test.codeContext ? test.codeContext.slice(0, 6000) : "No code context provided."}
-Screenshots in order: ${test.screenshots.length ? test.screenshots.map((screen, index) => `${index + 1}. ${screen.label || screen.id} ${screen.note || ""}`).join("\n") : "No screenshots provided. Use the website context and clearly note that visual findings are limited."}`;
-
-  const content = [{ type: "input_text", text: prompt }];
-  for (const screenshot of test.screenshots.slice(0, 5)) {
-    content.push({ type: "input_image", image_url: screenshot.url, detail: "high" });
-  }
-
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    signal: AbortSignal.timeout(45000),
-    headers: {
-      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: ANALYSIS_MODEL,
-      input: [{ role: "user", content }],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "ighost_analysis",
-          strict: false,
-          schema: schemaForAnalysis(),
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenAI analysis failed: ${response.status} ${errorText}`);
-  }
-
-  const json = await response.json();
-  const text = extractOutputText(json);
-  if (!text) throw new Error("OpenAI analysis returned no text");
-  return JSON.parse(text);
-}
-
-async function generateVoiceClip(test, reaction) {
-  if (!process.env.OPENAI_API_KEY) return null;
-  const voiceId = reaction.ghostId.endsWith("0") ? "verse" : "alloy";
-  const narration = `${reaction.quote} ${reaction.wouldContinue ? "I would continue, but carefully." : "This is where I would stop."}`;
-  const response = await fetch("https://api.openai.com/v1/audio/speech", {
-    method: "POST",
-    signal: AbortSignal.timeout(20000),
-    headers: {
-      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: TTS_MODEL,
-      voice: voiceId,
-      input: narration.slice(0, 900),
-      instructions: "Speak like a synthetic usability-test participant. Keep the delivery natural, concise, and emotionally grounded.",
-      response_format: "mp3",
-    }),
-  });
-  if (!response.ok) throw new Error(await response.text());
-  const fileName = `${test.id}-${reaction.id}.mp3`;
-  const filePath = path.join(audioDir, fileName);
-  const stream = createWriteStream(filePath);
-  await new Promise(async (resolve, reject) => {
-    try {
-      for await (const chunk of response.body) stream.write(chunk);
-      stream.end(resolve);
-    } catch (error) {
-      reject(error);
-    }
-  });
-  return `/generated/audio/${fileName}`;
 }
 
 async function generateWalkthroughVoice(test, ghost, steps) {
@@ -1014,15 +826,7 @@ Rules:
   if (!response.ok) throw new Error(await response.text());
   const fileName = `${test.id}-walkthrough.mp3`;
   const filePath = path.join(audioDir, fileName);
-  const stream = createWriteStream(filePath);
-  await new Promise(async (resolve, reject) => {
-    try {
-      for await (const chunk of response.body) stream.write(chunk);
-      stream.end(resolve);
-    } catch (error) {
-      reject(error);
-    }
-  });
+  await pipeline(response.body, createWriteStream(filePath));
   return { url: `/generated/audio/${fileName}`, script };
 }
 
@@ -1190,21 +994,17 @@ ${patch.prompt}
 - Do not include private screenshots, API keys, or local data in the PR.`;
 }
 
-async function githubToken() {
-  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
-  if (process.env.IGHOST_GITHUB_TOKEN) return process.env.IGHOST_GITHUB_TOKEN;
-  try {
-    return await runCommandCapture("gh", ["auth", "token"], 8000);
-  } catch {
-    return "";
-  }
-}
-
 async function createCodexIssue(test, patch) {
   const { owner, repo } = parseGitHubRepo(patch.repoUrl);
-  const token = await githubToken();
+  const configured = process.env.IGHOST_REPO_URL;
+  if (!configured) throw new Error("Set IGHOST_REPO_URL to the repository authorized for issue delivery.");
+  const allowed = parseGitHubRepo(configured);
+  if (`${owner}/${repo}`.toLowerCase() !== `${allowed.owner}/${allowed.repo}`.toLowerCase()) {
+    throw new RequestValidationError("Issue delivery is not enabled for this repository.", 403);
+  }
+  const token = process.env.IGHOST_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) {
-    throw new Error("GitHub is not authenticated. Sign in with `gh auth login` locally or set GITHUB_TOKEN on the server.");
+    throw new Error("Set IGHOST_GITHUB_TOKEN to a token scoped to the authorized repository.");
   }
   const title = `[iGhost] ${patch.title || patch.summary || "Codex patch request"}`.slice(0, 240);
   const body = codexIssueBody(test, patch);
@@ -1287,136 +1087,59 @@ Answer in first person as the ghost. Be specific, grounded, concise, and mention
   return followup;
 }
 
-function normalizeAnalysis(test, analysis) {
-  const merged = { ...analysis };
-  const defaultScreens = test.screenshots.length ? test.screenshots : [{ id: "website", label: test.websiteUrl || "Website", url: "" }];
-  const sourceGhosts = Array.isArray(merged.ghosts) && merged.ghosts.length ? merged.ghosts : defaultGhosts(test);
-  merged.ghosts = sourceGhosts.slice(0, test.ghostCount || 3).map((ghost, index) => ({
-    id: ghost.id || id("ghost"),
-    testId: test.id,
-    color: ghost.color || ["#ff8a5b", "#52d6c8", "#9b8cff"][index % 3],
-    ...ghost,
-  }));
-  const ghostIds = new Set(merged.ghosts.map((ghost) => ghost.id));
-  const sourceReactions = Array.isArray(merged.reactions) && merged.reactions.length
-    ? merged.reactions
-    : merged.ghosts.map((ghost, index) => ({
-        ghostId: ghost.id,
-        screenshotId: defaultScreens[0]?.id,
-        stepOrder: 0,
-        patienceBefore: ghost.patienceInitial || 70,
-        patienceAfter: Math.max(25, (ghost.patienceInitial || 70) - 20),
-        emotion: "curious",
-        wouldContinue: true,
-        quote: `I am starting on this page and trying to complete: ${test.intendedTask}`,
-      }));
-  merged.reactions = sourceReactions.map((reaction, index) => ({
-    id: reaction.id || id("reaction"),
-    testId: test.id,
-    ghostId: ghostIds.has(reaction.ghostId) ? reaction.ghostId : merged.ghosts[index % merged.ghosts.length].id,
-    screenshotId: reaction.screenshotId || defaultScreens[index % defaultScreens.length]?.id,
-    stepOrder: Number.isFinite(reaction.stepOrder) ? reaction.stepOrder : index,
-    patienceBefore: Number.isFinite(reaction.patienceBefore) ? reaction.patienceBefore : 70,
-    patienceAfter: Number.isFinite(reaction.patienceAfter) ? reaction.patienceAfter : 45,
-    emotion: reaction.emotion || "confused",
-    wouldContinue: reaction.wouldContinue !== false,
-    ...reaction,
-  }));
-  merged.rageQuitEvents = merged.rageQuitEvents || [];
-  merged.frictionPoints = merged.frictionPoints || [];
-  merged.rewriteSuggestions = merged.rewriteSuggestions || [];
-  merged.layoutSuggestions = merged.layoutSuggestions || [];
-  merged.codexPatch = merged.codexPatch || {
-    id: id("patch"),
-    testId: test.id,
-    status: "not_requested",
-    summary: "Request a Codex patch after reviewing the ghost findings.",
-    filesChanged: [],
-    instructions: "",
-    safetyNotes: [],
-  };
-  return merged;
+function runTest(testId, dependencies = {}) {
+  return runOnce(testId, () => executeTest(testId, dependencies));
 }
 
-async function runTest(testId) {
-  const db = await loadDb();
-  const test = db.tests[testId];
-  if (!test) return null;
-  test.status = "analyzing";
-  test.updatedAt = new Date().toISOString();
-  await saveDb(db);
-
+async function executeTest(testId, {
+  live = runLiveGhostSession, voice = generateWalkthroughVoice,
+  advice = generateActionableAdvice, video = generateReplayVideo,
+} = {}) {
+  let test = await store.get("tests", testId);
+  if (!test || (test.status === "complete" && test.videoUrl)) return test;
+  const update = async changes => {
+    test = await store.update("tests", testId, current => ({
+      ...current, ...changes, updatedAt: new Date().toISOString(),
+    }));
+  };
+  await update({ status: "analyzing", generationError: null });
   try {
     requireOpenAiKey();
-    const ghosts = defaultGhosts(test);
+    const ghosts = test.ghosts?.length ? test.ghosts : defaultGhosts(test);
     const ghost = ghosts[0];
-    const sessionSteps = await runLiveGhostSession(test, ghost);
-    const reactions = sessionSteps.map((step) => ({
-      id: id("reaction"),
-      testId: test.id,
-      ghostId: ghost.id,
-      screenshotId: test.screenshots[0]?.id,
-      stepOrder: step.stepOrder,
-      quote: step.thought,
-      emotion: step.action === "stop" ? "confused" : "curious",
+    const sessionSteps = test.sessionSteps?.length ? test.sessionSteps : await live(test, ghost);
+    const reactions = sessionSteps.map(step => ({
+      id: id("reaction"), testId: test.id, ghostId: ghost.id,
+      screenshotId: test.screenshots[0]?.id, stepOrder: step.stepOrder,
+      quote: step.thought, emotion: step.action === "stop" ? "confused" : "curious",
       patienceBefore: Math.max(20, ghost.patienceInitial - step.stepOrder * 10),
       patienceAfter: Math.max(15, ghost.patienceInitial - (step.stepOrder + 1) * 10),
       wouldContinue: step.action !== "stop",
     }));
-    const walkthroughVoice = await generateWalkthroughVoice(test, ghost, sessionSteps);
-    const actionableAdvice = await generateActionableAdvice(test, ghost, sessionSteps);
-
-    Object.assign(test, {
-      ghosts,
-      ghostIds: ghosts.map((item) => item.id),
-      reactions,
-      sessionSteps,
-      walkthroughAudioUrl: walkthroughVoice.url,
-      walkthroughScript: walkthroughVoice.script,
-      actionableAdvice,
-      frictionPoints: [],
-      rewriteSuggestions: [],
-      layoutSuggestions: [],
-      codexPatch: null,
-      status: "generating_assets",
-      updatedAt: new Date().toISOString(),
-      aiMode: "openai",
-    });
-
-    try {
-      delete test.videoError;
-      test.videoUrl = await generateReplayVideo(test);
-    } catch (error) {
-      delete test.videoUrl;
-      test.videoError = error.message;
+    await update({ ghosts, ghostIds: ghosts.map(item => item.id), sessionSteps, reactions, aiMode: "openai" });
+    // Save stages separately so a later failure/retry does not repeat paid work.
+    if (!test.walkthroughAudioUrl) {
+      const result = await voice(test, ghost, sessionSteps);
+      await update({ walkthroughAudioUrl: result.url, walkthroughScript: result.script });
     }
-
-    test.status = "complete";
-    test.updatedAt = new Date().toISOString();
+    if (!test.actionableAdvice) await update({ actionableAdvice: await advice(test, ghost, sessionSteps) });
+    await update({ status: "generating_assets", videoError: null });
+    try { await update({ videoUrl: await video(test) }); }
+    catch (error) { await update({ videoUrl: null, videoError: error.message }); }
     if (!test.reportId) {
       const report = {
-        id: id("report"),
-        testId: test.id,
-        publicSlug: safeSlug(test.productName),
-        isPublic: true,
-        title: `${test.productName || "Product"} ghost test`,
-        summary: test.productUnderstanding?.flowSummary || "Synthetic usability report",
+        id: id("report"), testId: test.id, publicSlug: safeSlug(test.productName),
+        isPublic: false, title: `${test.productName || "Product"} ghost test`,
+        summary: test.actionableAdvice?.summary || "Synthetic usability report",
         createdAt: new Date().toISOString(),
       };
-      db.reports[report.publicSlug] = report;
-      test.reportId = report.id;
-      test.reportSlug = report.publicSlug;
+      await store.create("reports", report.publicSlug, report);
+      await update({ reportId: report.id, reportSlug: report.publicSlug });
     }
+    await update({ status: "complete" });
   } catch (error) {
-    Object.assign(test, {
-      status: "failed",
-      updatedAt: new Date().toISOString(),
-      aiMode: "openai",
-      generationError: error.message,
-    });
+    await update({ status: "failed", aiMode: "openai", generationError: error.message });
   }
-
-  await saveDb(db);
   return test;
 }
 
@@ -1468,9 +1191,7 @@ async function handleApi(req, res, pathname) {
       ghostIds: [],
     };
     test.screenshotIds = test.screenshots.map((screen) => screen.id);
-    const db = await loadDb();
-    db.tests[test.id] = test;
-    await saveDb(db);
+    await store.create("tests", test.id, test);
     return send(res, 201, { test });
   }
 
@@ -1486,14 +1207,11 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && askMatch) {
     const body = await parseJsonBody(req);
     if (!body.question) return send(res, 400, { error: "Question is required." });
-    const db = await loadDb();
-    const test = db.tests[askMatch[1]];
+    let test = await store.get("tests", askMatch[1]);
     if (!test) return send(res, 404, { error: "Test not found" });
     try {
       const followup = await answerGhostQuestion(test, body);
-      test.followups = [...(test.followups || []), followup];
-      test.updatedAt = new Date().toISOString();
-      await saveDb(db);
+      test = await store.update("tests", test.id, current => ({ ...current, followups: [...(current.followups || []), followup], updatedAt: new Date().toISOString() }));
       return send(res, 200, { followup, test });
     } catch (error) {
       return send(res, 502, { error: error.message });
@@ -1503,76 +1221,78 @@ async function handleApi(req, res, pathname) {
   const patchMatch = pathname.match(/^\/api\/tests\/([^/]+)\/codex-patch$/);
   if (req.method === "POST" && patchMatch) {
     const body = await parseJsonBody(req);
-    const db = await loadDb();
-    const test = db.tests[patchMatch[1]];
+    let test = await store.get("tests", patchMatch[1]);
     if (!test) return send(res, 404, { error: "Test not found" });
     if (test.status !== "complete") {
       return send(res, 409, { error: "Run the ghost walkthrough before requesting a Codex patch." });
     }
     const codexPatch = buildCodexPatch(test, body);
-    test.codexPatch = codexPatch;
-    test.updatedAt = new Date().toISOString();
-    await saveDb(db);
-    return send(res, 200, { codexPatch, test });
+    // A delivery may complete while this prompt waits in the write queue.
+    // Preserve its result from the current record inside the atomic mutation.
+    test = await store.update("tests", test.id, current => ({
+      ...current,
+      codexPatch: current.codexPatch?.githubIssue ? {
+        ...codexPatch, githubIssue: current.codexPatch.githubIssue,
+        status: "sent_to_codex", sentAt: current.codexPatch.sentAt,
+      } : codexPatch,
+      updatedAt: new Date().toISOString(),
+    }));
+    return send(res, 200, { codexPatch: test.codexPatch, test });
   }
 
   const sendPatchMatch = pathname.match(/^\/api\/tests\/([^/]+)\/codex-patch\/send$/);
   if (req.method === "POST" && sendPatchMatch) {
     const body = await parseJsonBody(req);
-    const db = await loadDb();
-    const test = db.tests[sendPatchMatch[1]];
-    if (!test) return send(res, 404, { error: "Test not found" });
-    if (test.status !== "complete") {
-      return send(res, 409, { error: "Run the ghost walkthrough before sending a Codex issue." });
-    }
-    const codexPatch = test.codexPatch?.prompt ? test.codexPatch : buildCodexPatch(test, body);
-    if (codexPatch.githubIssue?.url && !body.force) {
-      return send(res, 200, { codexPatch, githubIssue: codexPatch.githubIssue, test });
-    }
-    try {
-      const githubIssue = await createCodexIssue(test, codexPatch);
-      test.codexPatch = {
-        ...codexPatch,
-        status: "sent_to_codex",
-        githubIssue,
-        sentAt: new Date().toISOString(),
-      };
-      test.updatedAt = new Date().toISOString();
-      await saveDb(db);
-      return send(res, 200, { codexPatch: test.codexPatch, githubIssue, test });
-    } catch (error) {
-      test.codexPatch = {
-        ...codexPatch,
-        status: "send_failed",
-        sendError: error.message,
-        updatedAt: new Date().toISOString(),
-      };
-      test.updatedAt = new Date().toISOString();
-      await saveDb(db);
-      return send(res, 502, { error: error.message, codexPatch: test.codexPatch, test });
-    }
+    const result = await sendOnce(sendPatchMatch[1], async () => {
+      let test = await store.get("tests", sendPatchMatch[1]);
+      if (!test) return { status: 404, body: { error: "Test not found" } };
+      if (test.status !== "complete") return { status: 409, body: { error: "Run the ghost walkthrough before sending a Codex issue." } };
+      const codexPatch = test.codexPatch?.prompt ? test.codexPatch : buildCodexPatch(test, body);
+      if (codexPatch.githubIssue?.url) return { status: 200, body: { codexPatch, githubIssue: codexPatch.githubIssue, test } };
+      try {
+        const githubIssue = await createCodexIssue(test, codexPatch);
+        test = await store.update("tests", test.id, current => ({
+          ...current, codexPatch: { ...codexPatch, status: "sent_to_codex", githubIssue, sentAt: new Date().toISOString() },
+          updatedAt: new Date().toISOString(),
+        }));
+        return { status: 200, body: { codexPatch: test.codexPatch, githubIssue, test } };
+      } catch (error) {
+        test = await store.update("tests", test.id, current => ({
+          ...current, codexPatch: { ...codexPatch, status: "send_failed", sendError: error.message }, updatedAt: new Date().toISOString(),
+        }));
+        return { status: error.statusCode || 502, body: { error: error.message, codexPatch: test.codexPatch, test } };
+      }
+    });
+    return send(res, result.status, result.body);
   }
 
   const testMatch = pathname.match(/^\/api\/tests\/([^/]+)$/);
   if (req.method === "GET" && testMatch) {
-    const db = await loadDb();
-    const test = db.tests[testMatch[1]];
+    const test = await store.get("tests", testMatch[1]);
     if (!test) return send(res, 404, { error: "Test not found" });
     return send(res, 200, { test });
   }
 
   const reportMatch = pathname.match(/^\/api\/reports\/([^/]+)$/);
   if (req.method === "GET" && reportMatch) {
-    const db = await loadDb();
-    const report = db.reports[reportMatch[1]];
+    const report = await store.get("reports", reportMatch[1]);
     if (!report || !report.isPublic) return send(res, 404, { error: "Report not found" });
-    const test = db.tests[report.testId];
+    const test = await store.get("tests", report.testId);
     if (!test) return send(res, 404, { error: "Test not found" });
-    const publicTest = { ...test, codeContext: "" };
-    if (publicTest.codexPatch) {
-      publicTest.codexPatch = { ...publicTest.codexPatch, safetyNotes: [...(publicTest.codexPatch.safetyNotes || []), "Private code context is excluded from public reports by default."] };
-    }
-    return send(res, 200, { report, test: publicTest });
+    const view = publicTestView(test);
+    if (view.videoUrl) view.videoUrl += `?report=${encodeURIComponent(report.publicSlug)}`;
+    return send(res, 200, { report, test: view });
+  }
+
+  const shareMatch = pathname.match(/^\/api\/tests\/([^/]+)\/report$/);
+  if (req.method === "POST" && shareMatch) {
+    const body = await parseJsonBody(req);
+    if (typeof body.isPublic !== "boolean") return send(res, 400, { error: "isPublic must be true or false." });
+    const test = await store.get("tests", shareMatch[1]);
+    if (!test?.reportSlug) return send(res, 404, { error: "Completed report not found." });
+    const report = await store.update("reports", test.reportSlug, current => current ? { ...current, isPublic: body.isPublic } : null);
+    if (!report) return send(res, 404, { error: "Report not found." });
+    return send(res, 200, { report, url: body.isPublic ? `/api/reports/${report.publicSlug}` : null });
   }
 
   return send(res, 404, { error: "API route not found" });
@@ -1641,8 +1361,11 @@ async function serveStatic(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host}`);
   try {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    // Route and authorize the same canonical path that static file lookup uses.
+    // URL parsing alone retains repeated separators after dot-segment removal.
+    url.pathname = path.posix.normalize(url.pathname);
     if (url.pathname === "/health") {
       return send(res, 200, { status: "ok" });
     }
@@ -1651,8 +1374,24 @@ const server = http.createServer(async (req, res) => {
       if (!limit.allowed) {
         return send(res, 429, { error: "Too many API requests. Please retry shortly." }, { "retry-after": String(limit.retryAfter) });
       }
+      if (url.pathname === "/api/session" && req.method === "POST") {
+        const body = await parseJsonBody(req);
+        const cookie = ownerAuth.login(req, body.token);
+        if (!cookie) return send(res, 401, { error: "Access token or request origin is invalid." });
+        return send(res, 200, { authenticated: true }, { "set-cookie": cookie });
+      }
+      const publicReport = req.method === "GET" && /^\/api\/reports\/[^/]+$/.test(url.pathname);
+      if (!publicReport && !ownerAuth.authorized(req)) return send(res, 401, { error: "Sign in with the owner access token." });
+      if (url.pathname === "/api/session" && req.method === "GET") return send(res, 200, { authenticated: true });
       await handleApi(req, res, url.pathname);
     } else {
+      if (url.pathname.startsWith("/generated/") && !ownerAuth.authorized(req)) {
+        const report = await store.get("reports", url.searchParams.get("report"));
+        const test = report?.isPublic ? await store.get("tests", report.testId) : null;
+        if (!["GET", "HEAD"].includes(req.method) || test?.videoUrl !== url.pathname) {
+          return send(res, 401, { error: "Sign in to view this media." });
+        }
+      }
       await serveStatic(req, res, url.pathname);
     }
   } catch (error) {
@@ -1663,6 +1402,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`iGhost running at http://localhost:${PORT}`);
-});
+export { server, store, runTest, generateReplayVideo, createCodexIssue };
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`iGhost running at http://${BIND_HOST}:${server.address().port}`);
+  });
+}

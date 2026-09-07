@@ -136,6 +136,7 @@ function toggleCustomGhost() {
 
 function setStatus(message, isError = false) {
   const status = app.querySelector("#status");
+  if (!status) return;
   status.className = `status${isError ? " error" : ""}`;
   status.textContent = message;
 }
@@ -143,6 +144,9 @@ function setStatus(message, isError = false) {
 async function submitRun(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const submit = form.querySelector('[type="submit"]');
+  if (submit.disabled) return;
+  submit.disabled = true;
   const payload = {
     websiteUrl: form.websiteUrl.value.trim(),
     intendedTask: form.intendedTask.value.trim(),
@@ -162,6 +166,8 @@ async function submitRun(event) {
     route(`/test/${test.id}`);
   } catch (error) {
     setStatus(error.message, true);
+  } finally {
+    submit.disabled = false;
   }
 }
 
@@ -303,14 +309,40 @@ function bindCodexPatch(test) {
   send?.addEventListener("click", async () => {
     send.disabled = true;
     setCodexStatus("Sending the GitHub fix request to Codex...");
-    await new Promise((resolve) => setTimeout(resolve, 1400));
-    send.classList.add("hidden");
-    app.querySelector("#codex-sent")?.classList.remove("hidden");
-    setCodexStatus("Done. Codex has the ghost's findings and will fix it in GitHub.");
+    try {
+      const { test: updatedTest, githubIssue } = await api(`/api/tests/${test.id}/codex-patch/send`, { method: "POST", body: "{}" });
+      if (!githubIssue?.url) throw new Error("The server did not confirm a GitHub issue.");
+      output(updatedTest);
+      setCodexStatus(`Created GitHub issue #${githubIssue.number}. Review it in GitHub to follow the request.`);
+    } catch (error) {
+      setCodexStatus(error.message, true);
+      send.disabled = false;
+    }
   });
 }
 
-function render() {
+function signIn() {
+  shell(`<section class="mvp"><div class="intro"><h1>Welcome to iGhost.</h1><p>Enter your owner access token to use this private usability lab.</p></div>
+    <form class="run-card" id="sign-in"><label><span>Access token</span><input name="token" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">Sign in</button><div id="status" class="status hidden"></div></form></section>`);
+  app.querySelector("#sign-in").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    try {
+      await api("/api/session", { method: "POST", body: JSON.stringify({ token: form.token.value }) });
+      form.token.value = "";
+      await render();
+    } catch (error) {
+      setStatus(error.message, true);
+      button.disabled = false;
+    }
+  });
+}
+
+async function render() {
+  try { await api("/api/session"); }
+  catch { return signIn(); }
   const path = location.pathname;
   const testMatch = path.match(/^\/test\/([^/]+)$/);
   if (testMatch) return loadTest(testMatch[1]);
