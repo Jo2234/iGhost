@@ -11,10 +11,12 @@ Instead of another generic UX report, iGhost produces a playable ghost session: 
 ## What It Does
 
 - Drives a browser through the target website.
-- Captures the ghost's journey as an MP4 with a highlighted cursor.
+- Builds an MP4 replay from captured screenshots with a highlighted cursor.
 - Generates a personality-matched OpenAI voiceover.
 - Turns the walkthrough into actionable product advice.
 - Creates a Codex-ready patch prompt from the findings.
+
+See [architecture and remaining roadmap](iGhost_product_engineering_spec.md) for the implemented browser/media flow, evidence boundaries and limitations.
 
 ## Product Loop
 
