@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: node:24-bookworm-slim
+    env:
+      IGHOST_TEST_BROWSER: /usr/bin/chromium
+      FFMPEG_PATH: /usr/bin/ffmpeg
+    steps:
+      - name: Install browser and media integration dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates chromium ffmpeg fonts-liberation
+      - uses: actions/checkout@v4
+      - name: Verify required integrations are available
+        run: |
+          node -e 'if (Number(process.versions.node.split(".")[0]) !== 24) process.exit(1)'
+          test -x "$IGHOST_TEST_BROWSER"
+          test -x "$FFMPEG_PATH"
+          "$IGHOST_TEST_BROWSER" --version
+          "$FFMPEG_PATH" -version
+      - run: npm run check
+      - run: npm test

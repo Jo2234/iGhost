@@ -1,0 +1,14 @@
+{
+  "viewport": "1280x900",
+  "recording": "Continuous Playwright browser recording; no cuts or time compression; captions rendered live",
+  "externalServices": "Blocked; scripted navigation and analysis; narration synthesis omitted",
+  "uiCalls": {
+    "create": 1,
+    "run": 1,
+    "patch": 1,
+    "sends": 0
+  },
+  "browserErrors": [],
+  "screenshots": "Original local HTML fixture rendered in Chromium",
+  "appRevision": "See git history for the recording commit"
+}
