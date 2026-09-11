@@ -4,6 +4,14 @@
 
 AI usability testing that records synthetic user sessions, narrates the failure points, and turns them into actionable product fixes.
 
+[![CI](https://github.com/Jo2234/iGhost/actions/workflows/ci.yml/badge.svg)](https://github.com/Jo2234/iGhost/actions/workflows/ci.yml)
+
+[![iGhost playing a synthetic Trailhead walkthrough](docs/demo/product.png)](docs/demo/product-demo.mp4)
+
+**[Watch the 76-second product demo](docs/demo/product-demo.mp4)** · [Watch the generated sample replay](docs/demo/sample-replay.mp4) · [Demo provenance and reproduction](docs/demo/README.md)
+
+The demo is a continuous recording of the real interface with a clearly labeled local fixture and scripted model responses. It shows sign-in, task/persona selection, MP4 playback, actionable advice, and patch-prompt creation. The replay inside the app is assembled from screenshots and cursor animation. This sample is silent: narration synthesis, live OpenAI execution and GitHub delivery are not demonstrated.
+
 iGhost is an AI usability lab for builders who need fast, visceral feedback on a website or product flow. Paste a URL, give the ghost a job, choose the kind of user you want to emulate, and watch a synthetic user try the product in a narrated walkthrough.
 
 Instead of another generic UX report, iGhost produces a playable ghost session: what the user saw, where they hesitated, what confused them, and what to fix next.
@@ -103,7 +111,9 @@ The image includes all `lib/` modules. `IGHOST_GENERATED_DIR` controls both wher
 
 ## Checks
 
-Run `npm run check` and `npm test`. Tests use synthetic data and mocked service boundaries; no real issue is sent. The MP4 smoke test runs when a local ffmpeg executable is available. To exercise Chromium against synthetic sites too:
+[CI](.github/workflows/ci.yml) runs `npm run check` and `npm test` on Node.js 24 in Debian, with Chromium and ffmpeg installed and explicitly required. It exercises the real browser egress boundary and narrated MP4 encoder on every push and pull request.
+
+Locally, run `npm run check` and `npm test`. Tests use synthetic data and mocked service boundaries; no real issue is sent. The MP4 smoke test runs when a local ffmpeg executable is available. To exercise Chromium against synthetic sites too:
 
 ```bash
 IGHOST_TEST_BROWSER="/path/to/chromium" npm test
@@ -122,3 +132,7 @@ The browser test uses a fresh temporary profile, denies all destinations except 
 Rate limits use the direct peer IP instead of caller-controlled forwarding headers. Behind a reverse proxy, clients share that peer limit; owner authentication remains the access boundary.
 
 See `SECURITY_HARDENING_DEMO.md` for demo-ready validation examples and test coverage notes.
+
+## License
+
+[MIT](LICENSE), copyright Johan Vaz. Chromium, ffmpeg and development tools retain their own licenses; they are not bundled with this source repository.
