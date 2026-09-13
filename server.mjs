@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { Store, singleFlight } from "./lib/store.mjs";
 import { createOwnerAuth, publicTestView } from "./lib/auth.mjs";
 import { createEgressProxy, browserEgressArguments, prepareBrowserProfile } from "./lib/egress.mjs";
-import { generatedMediaPath } from "./lib/media.mjs";
+import { generatedMediaPath, audioDurationFromFfmpeg } from "./lib/media.mjs";
 import { followOpenedPage } from "./lib/browser-tabs.mjs";
 import { readFile, writeFile, mkdir, mkdtemp, rm, readdir, stat } from "node:fs/promises";
 import { existsSync, createWriteStream, createReadStream } from "node:fs";
@@ -524,7 +524,7 @@ function runCommand(command, args, timeout = 60000) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve();
+      if (code === 0) resolve(stderr);
       else reject(new Error(stderr.trim() || `${path.basename(command)} failed with exit code ${code}.`));
     });
   });
@@ -667,9 +667,18 @@ async function generateReplayVideo(test) {
   const cursorPath = path.join(tempDir, "cursor.png");
   const segments = [];
   const scriptWords = String(test.walkthroughScript || "").trim().split(/\s+/).filter(Boolean).length;
-  const durationPerStep = Math.max(6.5, Math.min(10, scriptWords ? scriptWords / 2.25 / replaySteps.length : 7.5));
+  const firstAudio = test.walkthroughAudioUrl || (test.reactions || []).map((reaction) => reaction.audioUrl).find(Boolean);
+  const audioPath = firstAudio ? generatedMediaPath(generatedDir, firstAudio) : null;
 
   try {
+    // Generated speech pace varies. Size the visual timeline to the actual audio
+    // instead of capping every screenshot at ten seconds and freezing the end.
+    const audioDuration = audioPath
+      ? audioDurationFromFfmpeg(await runCommand(ffmpeg, ["-i", audioPath, "-f", "null", "-"]))
+      : null;
+    const durationPerStep = audioDuration
+      ? audioDuration / replaySteps.length
+      : Math.max(6.5, Math.min(10, scriptWords ? scriptWords / 2.25 / replaySteps.length : 7.5));
     await writeFile(cursorPath, Buffer.from(cursorPngBase64, "base64"));
     for (const [index, step] of replaySteps.entries()) {
       if (!step.screenshotUrl) continue;
@@ -728,11 +737,9 @@ async function generateReplayVideo(test) {
     const silentVideoPath = path.join(tempDir, "silent.mp4");
     await runCommand(ffmpeg, ["-y", "-f", "concat", "-safe", "0", "-i", concatPath, "-c", "copy", silentVideoPath]);
 
-    const firstAudio = test.walkthroughAudioUrl || (test.reactions || []).map((reaction) => reaction.audioUrl).find(Boolean);
     const fileName = `${test.id}-ghost-replay.mp4`;
     const outputPath = path.join(videoDir, fileName);
     if (firstAudio) {
-      const audioPath = generatedMediaPath(generatedDir, firstAudio);
       await runCommand(ffmpeg, [
         "-y",
         "-i",
