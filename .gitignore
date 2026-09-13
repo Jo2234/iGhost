@@ -6,3 +6,4 @@ public/generated/audio/*.mp3
 public/generated/video/*.mp4
 
 node_modules/
+tools/demo/output/
