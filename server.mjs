@@ -4,6 +4,7 @@ import { Store, singleFlight } from "./lib/store.mjs";
 import { createOwnerAuth, publicTestView } from "./lib/auth.mjs";
 import { createEgressProxy, browserEgressArguments, prepareBrowserProfile } from "./lib/egress.mjs";
 import { generatedMediaPath } from "./lib/media.mjs";
+import { followOpenedPage } from "./lib/browser-tabs.mjs";
 import { readFile, writeFile, mkdir, mkdtemp, rm, readdir, stat } from "node:fs/promises";
 import { existsSync, createWriteStream, createReadStream } from "node:fs";
 import path from "node:path";
@@ -250,7 +251,7 @@ async function launchBrowserSession(url) {
     if (navigation.errorText) throw new Error(`Website navigation failed: ${navigation.errorText}`);
     await loaded;
     await wait(1200);
-    return { cdp, child, tempDir, proxy };
+    return { cdp, child, tempDir, proxy, debugOrigin: `http://127.0.0.1:${port}` };
   } catch (error) {
     await proxy.close();
     killBrowser(child);
@@ -335,7 +336,8 @@ Return only JSON:
   return JSON.parse(cleaned);
 }
 
-async function performGhostAction(cdp, action, elements) {
+async function performGhostAction(session, action, elements) {
+  const { cdp } = session;
   if (action.action === "scroll") {
     await cdp.send("Runtime.evaluate", { expression: "window.scrollBy({ top: Math.round(window.innerHeight * 0.75), behavior: 'instant' })" });
     await wait(1000);
@@ -344,12 +346,15 @@ async function performGhostAction(cdp, action, elements) {
   if (action.action === "click") {
     const target = elements.find((item) => item.index === action.targetIndex) || elements[0];
     if (target) {
+      const { targetInfos } = await cdp.send("Target.getTargets");
+      const previousIds = new Set(targetInfos.map(target => target.targetId));
       const x = clamp(Math.round(target.x + target.width / 2), 1, 1439);
       const y = clamp(Math.round(target.y + target.height / 2), 1, 1099);
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
       await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
       await wait(1700);
+      await followOpenedPage(session, previousIds, url => new CdpClient(url));
       return { x, y, label: target.text || target.href || "Click" };
     }
   }
@@ -366,7 +371,7 @@ async function runLiveGhostSession(test, ghost) {
       const elements = await getClickableElements(session.cdp);
       const pageState = await getPageState(session.cdp);
       const action = await chooseGhostAction(test, ghost, step, screenshotUrl, elements, pageState, steps.map((item) => item.action));
-      const cursor = await performGhostAction(session.cdp, action, elements);
+      const cursor = await performGhostAction(session, action, elements);
       steps.push({
         id: id("live"),
         stepOrder: step,
