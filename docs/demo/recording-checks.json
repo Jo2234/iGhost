@@ -1,7 +1,7 @@
 {
   "viewport": "1280x900",
   "recording": "Continuous Playwright browser recording; no cuts or time compression; captions rendered live",
-  "externalServices": "Blocked; scripted navigation and analysis; narration synthesis omitted",
+  "externalServices": "Blocked; scripted navigation and analysis; in-app narration synthesis omitted",
   "uiCalls": {
     "create": 1,
     "run": 1,
@@ -10,5 +10,8 @@
   },
   "browserErrors": [],
   "screenshots": "Original local HTML fixture rendered in Chromium",
-  "appRevision": "See git history for the recording commit"
+  "appRevision": "See git history for the recording commit",
+  "postProduction": "Local synthetic explanatory narration and captions added; see narration.json. The embedded sample replay remains silent.",
+  "sha256": "728530fafc9c6ee8b1c8bc38072e038af58d0de2f570d42c829f5cffd6100a3d",
+  "sizeBytes": 2010129
 }
