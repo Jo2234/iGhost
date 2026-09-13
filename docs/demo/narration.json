@@ -1,0 +1,87 @@
+{
+  "generated_at": "2026-09-13",
+  "engine": "kokoro-onnx 0.6.1 / Kokoro v1.0",
+  "voice": "af_heart",
+  "language": "en-US",
+  "purpose": "Synthetic explanatory voiceover added in post-production; not app-generated speech.",
+  "source_video_sha256": "4587eedcf1283a74cbc21081888a6651998919c29919fb63d4148adb5c3ab0cc",
+  "output_video_sha256": "728530fafc9c6ee8b1c8bc38072e038af58d0de2f570d42c829f5cffd6100a3d",
+  "source_duration_seconds": 75.96,
+  "video_stream": "Copied unchanged; no cuts or speed changes.",
+  "audio_codec": "AAC",
+  "audio_sample_rate": 24000,
+  "model_source": "https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0",
+  "model_license": "Apache-2.0",
+  "cues": [
+    {
+      "start": 0.5,
+      "end": 10.5,
+      "text": "iGhost turns a website task into a usability walkthrough. This example uses a fictional local site and scripted model decisions.",
+      "actual_end": 9.076,
+      "speed": 0.95
+    },
+    {
+      "start": 11.0,
+      "end": 17.5,
+      "text": "Mara is an impatient first-time visitor, checking whether she can try the product before paying.",
+      "actual_end": 16.653,
+      "speed": 0.95
+    },
+    {
+      "start": 18.0,
+      "end": 23.2,
+      "text": "Generate walkthrough builds a playable replay from screenshots and cursor positions.",
+      "actual_end": 22.907,
+      "speed": 1.017
+    },
+    {
+      "start": 23.8,
+      "end": 30.2,
+      "text": "On the homepage, Get started gives no clear promise of a free trial.",
+      "actual_end": 27.917,
+      "speed": 0.95
+    },
+    {
+      "start": 30.8,
+      "end": 37.8,
+      "text": "It leads to two paid plans. The scripted visitor cannot find a trial.",
+      "actual_end": 35.045,
+      "speed": 0.95
+    },
+    {
+      "start": 38.5,
+      "end": 45.0,
+      "text": "The suggested fixes: show the starting price earlier, and make the next step clear.",
+      "actual_end": 43.321,
+      "speed": 0.95
+    },
+    {
+      "start": 45.6,
+      "end": 51.3,
+      "text": "The generated Codex prompt includes the task, recommendations, and replay evidence.",
+      "actual_end": 50.997,
+      "speed": 0.988
+    },
+    {
+      "start": 51.9,
+      "end": 57.2,
+      "text": "We inspect the prompt here. Nothing is sent to GitHub.",
+      "actual_end": 55.143,
+      "speed": 0.95
+    },
+    {
+      "start": 58.0,
+      "end": 65.3,
+      "text": "This connects a user task, recorded friction, and a concrete change request for review.",
+      "actual_end": 63.312,
+      "speed": 0.95
+    },
+    {
+      "start": 66.0,
+      "end": 74.9,
+      "text": "The replay is a real app output. The visitor's judgments are scripted, so live model quality remains untested.",
+      "actual_end": 73.275,
+      "speed": 0.95
+    }
+  ]
+}

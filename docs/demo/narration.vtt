@@ -1,0 +1,54 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:09.076
+iGhost turns a website task into a usability
+walkthrough. This example uses a fictional local
+site and scripted model decisions.
+
+2
+00:00:11.000 --> 00:00:16.653
+Mara is an impatient first-time visitor,
+checking whether she can try the product before
+paying.
+
+3
+00:00:18.000 --> 00:00:22.907
+Generate walkthrough builds a playable replay
+from screenshots and cursor positions.
+
+4
+00:00:23.800 --> 00:00:27.917
+On the homepage, Get started gives no clear
+promise of a free trial.
+
+5
+00:00:30.800 --> 00:00:35.045
+It leads to two paid plans. The scripted visitor
+cannot find a trial.
+
+6
+00:00:38.500 --> 00:00:43.321
+The suggested fixes: show the starting price
+earlier, and make the next step clear.
+
+7
+00:00:45.600 --> 00:00:50.997
+The generated Codex prompt includes the task,
+recommendations, and replay evidence.
+
+8
+00:00:51.900 --> 00:00:55.143
+We inspect the prompt here. Nothing is sent to
+GitHub.
+
+9
+00:00:58.000 --> 00:01:03.312
+This connects a user task, recorded friction,
+and a concrete change request for review.
+
+10
+00:01:06.000 --> 00:01:13.275
+The replay is a real app output. The visitor's
+judgments are scripted, so live model quality
+remains untested.

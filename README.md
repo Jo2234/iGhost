@@ -8,9 +8,9 @@ AI usability testing that records synthetic user sessions, narrates the failure 
 
 [![iGhost playing a synthetic Trailhead walkthrough](docs/demo/product.png)](docs/demo/product-demo.mp4)
 
-**[Watch the 76-second product demo](docs/demo/product-demo.mp4)** · [Watch the generated sample replay](docs/demo/sample-replay.mp4) · [Demo provenance and reproduction](docs/demo/README.md)
+**[Watch the narrated 76-second product demo](docs/demo/product-demo.mp4)** · [Watch the generated sample replay](docs/demo/sample-replay.mp4) · [Demo provenance and reproduction](docs/demo/README.md)
 
-The demo is a continuous recording of the real interface with a clearly labeled local fixture and scripted model responses. It shows sign-in, task/persona selection, MP4 playback, actionable advice, and patch-prompt creation. The replay inside the app is assembled from screenshots and cursor animation. This sample is silent: narration synthesis, live OpenAI execution and GitHub delivery are not demonstrated.
+The demo is a continuous recording of the real interface with a clearly labeled local fixture and scripted model responses. It shows sign-in, task/persona selection, MP4 playback, actionable advice, and patch-prompt creation. The replay inside the app is assembled from screenshots and cursor animation. The outer walkthrough now has explanatory English narration added in post-production. The embedded sample replay remains silent; in-app narration synthesis, live OpenAI execution and GitHub delivery are not demonstrated. [Captions](docs/demo/narration.vtt) · [Narration script](docs/demo/narration.json).
 
 iGhost is an AI usability lab for builders who need fast, visceral feedback on a website or product flow. Paste a URL, give the ghost a job, choose the kind of user you want to emulate, and watch a synthetic user try the product in a narrated walkthrough.
 

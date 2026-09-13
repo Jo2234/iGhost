@@ -2,7 +2,7 @@
 
 [Watch the product demo](product-demo.mp4) · [Play the silent sample replay](sample-replay.mp4)
 
-The product demo is a continuous, real-time Playwright recording of the actual iGhost frontend in Chromium, encoded to H.264 MP4. No cuts, speed changes, reconstructed UI screens or remote accounts appear. The permanent banner and chapter captions were rendered in the browser while recording. Both the outer recording and the sample replay are silent. Narration synthesis is not demonstrated.
+The product demo is a continuous, real-time Playwright recording of the actual iGhost frontend in Chromium, encoded to H.264 MP4. No cuts, speed changes, reconstructed UI screens or remote accounts appear. The permanent banner and chapter captions were rendered in the browser while recording. The outer recording includes explanatory English voiceover added in post-production. The embedded sample replay is silent; in-app narration synthesis is not demonstrated.
 
 The demo uses a fictional trail-planning product, **Trailhead**, implemented in [an original local HTML fixture](../../tools/demo/fixtures/trailhead.html). Its intentional UX problem is a vague “Get started” button that leads to paid plans without explaining trial terms. The ghost's response and advice are scripted fixtures, not independent AI findings or evidence of improved conversion.
 
@@ -12,7 +12,8 @@ The demo uses a fictional trail-planning product, **Trailhead**, implemented in 
 | Enter `https://trailhead.example` | Reserved example hostname; no request to that site |
 | Create a walkthrough | Recorder substitutes the real authenticated screenshot-upload API for website capture |
 | Browser observations and advice | Fixed synthetic inputs through the existing `runTest` dependency injection boundary |
-| Narration | Omitted; no speech fixture or OpenAI speech request |
+| In-app narration | Omitted; no speech fixture or OpenAI speech request |
+| Explanatory voiceover | Locally generated synthetic narration added to the outer recording afterward |
 | Playback inside iGhost | Real `generateReplayVideo` ffmpeg encoder: screenshot frames, animated cursor and captions |
 | Generate a Codex request | Real authenticated server endpoint, using the stored findings |
 | GitHub delivery | Not invoked; recorder blocks and asserts zero send requests |
@@ -33,4 +34,10 @@ FFMPEG_PATH=/usr/bin/ffmpeg node tools/demo/record.mjs
 
 For an already-installed browser, also set `CHROME_PATH` to its executable. On macOS, set `FFMPEG_PATH` to the installed ffmpeg path. The recorder can use a preinstalled Playwright module through `IGHOST_PLAYWRIGHT_MODULE`. It overwrites the files in this directory, closes its isolated browser and removes its temporary server data afterward.
 
-All committed media was generated from the original HTML fixture and the real app interface. No third-party speech recording or voice asset is included.
+All committed media was generated from the original HTML fixture and the real app interface. The explanatory voiceover uses a generic synthetic Kokoro `af_heart` voice, not a recording of a real speaker.
+
+## Voiceover and captions
+
+[Timed narration and provenance](narration.json) records the explanatory cue text, actual speech endings, and source/output hashes. [WebVTT captions](narration.vtt) accompany the MP4, which also contains an optional caption track. The video stream is copied unchanged, with no cuts or timing changes.
+
+The recorder still creates a silent base recording. When making another narrated edit, align cues to the new recording, synthesize speech within each window, and mux the narration/captions while copying the video stream. Git history retains the original silent asset. Checks on 13 September 2026 verified unchanged video packets, AAC narration, ten caption cues, and no speech overlap or window overrun.
