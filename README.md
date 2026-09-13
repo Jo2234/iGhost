@@ -6,11 +6,13 @@ AI usability testing that records synthetic user sessions, narrates the failure 
 
 [![CI](https://github.com/Jo2234/iGhost/actions/workflows/ci.yml/badge.svg)](https://github.com/Jo2234/iGhost/actions/workflows/ci.yml)
 
-[![iGhost playing a synthetic Trailhead walkthrough](docs/demo/product.png)](docs/demo/product-demo.mp4)
+[![iGhost playing Ada's real AI-generated portfolio walkthrough](docs/demo/product.png)](docs/demo/product-demo.mp4)
 
-**[Watch the narrated 76-second product demo](docs/demo/product-demo.mp4)** · [Watch the generated sample replay](docs/demo/sample-replay.mp4) · [Demo provenance and reproduction](docs/demo/README.md)
+**[Watch the narrated 94-second live API walkthrough](docs/demo/product-demo.mp4)** · [Play Ada's generated replay with voice](docs/demo/sample-replay.mp4) · [Recording evidence and reproduction](docs/demo/README.md)
 
-The demo is a continuous recording of the real interface with a clearly labeled local fixture and scripted model responses. It shows sign-in, task/persona selection, MP4 playback, actionable advice, and patch-prompt creation. The replay inside the app is assembled from screenshots and cursor animation. The outer walkthrough now has explanatory English narration added in post-production. The embedded sample replay remains silent; in-app narration synthesis, live OpenAI execution and GitHub delivery are not demonstrated. [Captions](docs/demo/narration.vtt) · [Narration script](docs/demo/narration.json).
+Ada, a skeptical AI persona, explores Johan's public portfolio, opens a project repository, and inspects his public profile. This walkthrough uses seven successful OpenAI app-generation requests: `gpt-5.6-sol` chooses browser actions and generates the script and advice; `gpt-4o-mini-tts` supplies Ada's voice. It shows task/persona selection, the generated replay, advice, and a scoped Codex prompt. [Captions](docs/demo/narration.vtt) · [Narration and timing](docs/demo/narration.json).
+
+The edited recording removes the generation wait and then shows the saved result from the same run. Its replay combines actual browser screenshots and cursor positions with AI-generated speech. After fixing a narration-duration bug, the same captured screens and audio were re-encoded locally and replayed without further app API calls. These are one synthetic participant's observations, not human usability evidence. GitHub delivery is not exercised. [Full provenance and limits](docs/demo/README.md).
 
 iGhost is an AI usability lab for builders who need fast, visceral feedback on a website or product flow. Paste a URL, give the ghost a job, choose the kind of user you want to emulate, and watch a synthetic user try the product in a narrated walkthrough.
 

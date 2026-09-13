@@ -1,4 +1,5 @@
-// Development-only recorder. No production route, auth or egress policy is changed.
+// Legacy offline fixture recorder, not the source of the current public demo.
+// No production route, auth or egress policy is changed.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from "node:fs/promises";
@@ -9,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
-const output = path.join(root, "docs/demo");
+const output = path.join(here, "output");
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.IGHOST_PLAYWRIGHT_MODULE || "playwright");
 const temporary = await mkdtemp(path.join(os.tmpdir(), "ighost-demo-"));

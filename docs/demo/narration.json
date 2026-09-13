@@ -1,87 +1,171 @@
 {
   "generated_at": "2026-09-13",
-  "engine": "kokoro-onnx 0.6.1 / Kokoro v1.0",
+  "source_video_sha256": "b9fcb26c68df2e7c8408dd7e1194fad9506c2cd2ca1ba79d84d59d6e634065a7",
+  "output_video_sha256": "53543edd596b0515a3bf2a2a42a2a4fedca7c218c1927a98d2af4bf1d9f2a3c0",
+  "duration_seconds": 93.808,
+  "engine": "Kokoro v1.0 / kokoro-onnx 0.6.1",
   "voice": "af_heart",
-  "language": "en-US",
-  "purpose": "Synthetic explanatory voiceover added in post-production; not app-generated speech.",
-  "source_video_sha256": "4587eedcf1283a74cbc21081888a6651998919c29919fb63d4148adb5c3ab0cc",
-  "output_video_sha256": "728530fafc9c6ee8b1c8bc38072e038af58d0de2f570d42c829f5cffd6100a3d",
-  "source_duration_seconds": 75.96,
-  "video_stream": "Copied unchanged; no cuts or speed changes.",
-  "audio_codec": "AAC",
-  "audio_sample_rate": 24000,
+  "purpose": "Explanatory voiceover over a recording of real API-backed app execution.",
+  "video_stream": "Copied unchanged from the supplied recording; see capture provenance for edits.",
+  "app_audio": "Preserved and ducked beneath narration",
   "model_source": "https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0",
-  "model_license": "Apache-2.0",
   "cues": [
     {
       "start": 0.5,
-      "end": 10.5,
-      "text": "iGhost turns a website task into a usability walkthrough. This example uses a fictional local site and scripted model decisions.",
-      "actual_end": 9.076,
-      "speed": 0.95
+      "end": 8.7,
+      "text": "iGhost sends an AI user to explore a website. Ada is looking for evidence of Johan\u2019s work.",
+      "actual_end": 6.687,
+      "speed": 0.97
     },
     {
-      "start": 11.0,
-      "end": 17.5,
-      "text": "Mara is an impatient first-time visitor, checking whether she can try the product before paying.",
-      "actual_end": 16.653,
-      "speed": 0.95
+      "start": 9.0,
+      "end": 13.5,
+      "text": "I\u2019ve shortened the wait. Here\u2019s Ada\u2019s replay.",
+      "actual_end": 11.581,
+      "speed": 0.97
     },
     {
-      "start": 18.0,
-      "end": 23.2,
-      "text": "Generate walkthrough builds a playable replay from screenshots and cursor positions.",
-      "actual_end": 22.907,
-      "speed": 1.017
+      "start": 74.6,
+      "end": 83.5,
+      "text": "After exploring the repository and profile, Ada recommends putting more implementation evidence directly on the project cards.",
+      "actual_end": 82.515,
+      "speed": 0.97
     },
     {
-      "start": 23.8,
-      "end": 30.2,
-      "text": "On the homepage, Get started gives no clear promise of a free trial.",
-      "actual_end": 27.917,
-      "speed": 0.95
-    },
-    {
-      "start": 30.8,
-      "end": 37.8,
-      "text": "It leads to two paid plans. The scripted visitor cannot find a trial.",
-      "actual_end": 35.045,
-      "speed": 0.95
-    },
-    {
-      "start": 38.5,
-      "end": 45.0,
-      "text": "The suggested fixes: show the starting price earlier, and make the next step clear.",
-      "actual_end": 43.321,
-      "speed": 0.95
-    },
-    {
-      "start": 45.6,
-      "end": 51.3,
-      "text": "The generated Codex prompt includes the task, recommendations, and replay evidence.",
-      "actual_end": 50.997,
-      "speed": 0.988
-    },
-    {
-      "start": 51.9,
-      "end": 57.2,
-      "text": "We inspect the prompt here. Nothing is sent to GitHub.",
-      "actual_end": 55.143,
-      "speed": 0.95
-    },
-    {
-      "start": 58.0,
-      "end": 65.3,
-      "text": "This connects a user task, recorded friction, and a concrete change request for review.",
-      "actual_end": 63.312,
-      "speed": 0.95
-    },
-    {
-      "start": 66.0,
-      "end": 74.9,
-      "text": "The replay is a real app output. The visitor's judgments are scripted, so live model quality remains untested.",
-      "actual_end": 73.275,
-      "speed": 0.95
+      "start": 84.2,
+      "end": 93.4,
+      "text": "Her findings become a scoped Codex prompt, ready to review alongside the captured screens.",
+      "actual_end": 89.619,
+      "speed": 0.97
     }
-  ]
+  ],
+  "caption_cues": [
+    {
+      "start": 0.5,
+      "end": 6.687,
+      "text": "iGhost sends an AI user to explore a website. Ada is looking for evidence of Johan\u2019s work.",
+      "speaker": "Narrator"
+    },
+    {
+      "start": 9.0,
+      "end": 11.581,
+      "text": "I\u2019ve shortened the wait. Here\u2019s Ada\u2019s replay.",
+      "speaker": "Narrator"
+    },
+    {
+      "start": 14.042,
+      "end": 16.042,
+      "text": "I'm scrolling down",
+      "speaker": "Ada"
+    },
+    {
+      "start": 16.881999914169313,
+      "end": 20.08199996185303,
+      "text": "Okay I can already see two AI related demos",
+      "speaker": "Ada"
+    },
+    {
+      "start": 20.802000228881838,
+      "end": 23.642000381469728,
+      "text": "but I'm not ready to judge them from the cards alone",
+      "speaker": "Ada"
+    },
+    {
+      "start": 24.481999580383302,
+      "end": 28.86199969482422,
+      "text": "I want the project descriptions and ideally something concrete about",
+      "speaker": "Ada"
+    },
+    {
+      "start": 28.86199969482422,
+      "end": 29.781999771118166,
+      "text": "how they're implemented",
+      "speaker": "Ada"
+    },
+    {
+      "start": 30.742000762939455,
+      "end": 34.781999771118166,
+      "text": "This Equity Research Copilot says it traces evidence",
+      "speaker": "Ada"
+    },
+    {
+      "start": 35.30200022888184,
+      "end": 39.30200022888184,
+      "text": "which is a meaningful claim for an AI workflow So I'm opening",
+      "speaker": "Ada"
+    },
+    {
+      "start": 39.30200022888184,
+      "end": 42.84199923706055,
+      "text": "the source first All right this is more useful",
+      "speaker": "Ada"
+    },
+    {
+      "start": 43.6620008392334,
+      "end": 45.14200038146973,
+      "text": "I can inspect the repository",
+      "speaker": "Ada"
+    },
+    {
+      "start": 45.98200053405762,
+      "end": 49.72200030517578,
+      "text": "see actual implementation details and there are recent commits",
+      "speaker": "Ada"
+    },
+    {
+      "start": 50.68199938964844,
+      "end": 54.402000610351564,
+      "text": "That's credible evidence but it's still only one project",
+      "speaker": "Ada"
+    },
+    {
+      "start": 55.20199984741211,
+      "end": 59.36199969482422,
+      "text": "I'm opening Jo2234's public profile",
+      "speaker": "Ada"
+    },
+    {
+      "start": 59.36199969482422,
+      "end": 61.44200152587891,
+      "text": "to check the broader body of work",
+      "speaker": "Ada"
+    },
+    {
+      "start": 62.481998626708986,
+      "end": 66.66199893188477,
+      "text": "The profile makes specific claims and links reviewable",
+      "speaker": "Ada"
+    },
+    {
+      "start": 66.66199893188477,
+      "end": 67.24200076293945,
+      "text": "contributions",
+      "speaker": "Ada"
+    },
+    {
+      "start": 67.90200061035156,
+      "end": 72.2820016784668,
+      "text": "I'm scrolling down I still want the complete project list before",
+      "speaker": "Ada"
+    },
+    {
+      "start": 72.2820016784668,
+      "end": 73.18199938964844,
+      "text": "I trust the summary",
+      "speaker": "Ada"
+    },
+    {
+      "start": 74.6,
+      "end": 82.515,
+      "text": "After exploring the repository and profile, Ada recommends putting more implementation evidence directly on the project cards.",
+      "speaker": "Narrator"
+    },
+    {
+      "start": 84.2,
+      "end": 89.619,
+      "text": "Her findings become a scoped Codex prompt, ready to review alongside the captured screens.",
+      "speaker": "Narrator"
+    }
+  ],
+  "app_speech_caption_method": "Whisper-1 word timestamps, reviewed against the generated speech and captured app output."
 }

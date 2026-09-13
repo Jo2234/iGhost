@@ -1,54 +1,102 @@
 WEBVTT
 
 1
-00:00:00.500 --> 00:00:09.076
-iGhost turns a website task into a usability
-walkthrough. This example uses a fictional local
-site and scripted model decisions.
+00:00:00.500 --> 00:00:06.687
+Narrator: iGhost sends an AI user to explore
+a website. Ada is looking for evidence of
+Johan’s work.
 
 2
-00:00:11.000 --> 00:00:16.653
-Mara is an impatient first-time visitor,
-checking whether she can try the product before
-paying.
+00:00:09.000 --> 00:00:11.581
+I’ve shortened the wait. Here’s Ada’s
+replay.
 
 3
-00:00:18.000 --> 00:00:22.907
-Generate walkthrough builds a playable replay
-from screenshots and cursor positions.
+00:00:14.042 --> 00:00:16.042
+Ada: I'm scrolling down
 
 4
-00:00:23.800 --> 00:00:27.917
-On the homepage, Get started gives no clear
-promise of a free trial.
+00:00:16.882 --> 00:00:20.082
+Okay I can already see two AI related demos
 
 5
-00:00:30.800 --> 00:00:35.045
-It leads to two paid plans. The scripted visitor
-cannot find a trial.
+00:00:20.802 --> 00:00:23.642
+but I'm not ready to judge them from the
+cards alone
 
 6
-00:00:38.500 --> 00:00:43.321
-The suggested fixes: show the starting price
-earlier, and make the next step clear.
+00:00:24.482 --> 00:00:28.862
+I want the project descriptions and ideally
+something concrete about
 
 7
-00:00:45.600 --> 00:00:50.997
-The generated Codex prompt includes the task,
-recommendations, and replay evidence.
+00:00:28.862 --> 00:00:29.782
+how they're implemented
 
 8
-00:00:51.900 --> 00:00:55.143
-We inspect the prompt here. Nothing is sent to
-GitHub.
+00:00:30.742 --> 00:00:34.782
+This Equity Research Copilot says it traces
+evidence
 
 9
-00:00:58.000 --> 00:01:03.312
-This connects a user task, recorded friction,
-and a concrete change request for review.
+00:00:35.302 --> 00:00:39.302
+which is a meaningful claim for an AI
+workflow So I'm opening
 
 10
-00:01:06.000 --> 00:01:13.275
-The replay is a real app output. The visitor's
-judgments are scripted, so live model quality
-remains untested.
+00:00:39.302 --> 00:00:42.842
+the source first All right this is more
+useful
+
+11
+00:00:43.662 --> 00:00:45.142
+I can inspect the repository
+
+12
+00:00:45.982 --> 00:00:49.722
+see actual implementation details and there
+are recent commits
+
+13
+00:00:50.682 --> 00:00:54.402
+That's credible evidence but it's still only
+one project
+
+14
+00:00:55.202 --> 00:00:59.362
+I'm opening Jo2234's public profile
+
+15
+00:00:59.362 --> 00:01:01.442
+to check the broader body of work
+
+16
+00:01:02.482 --> 00:01:06.662
+The profile makes specific claims and links
+reviewable
+
+17
+00:01:06.662 --> 00:01:07.242
+contributions
+
+18
+00:01:07.902 --> 00:01:12.282
+I'm scrolling down I still want the complete
+project list before
+
+19
+00:01:12.282 --> 00:01:13.182
+I trust the summary
+
+20
+00:01:14.600 --> 00:01:22.515
+Narrator: After exploring the repository and
+profile, Ada recommends putting more
+implementation evidence directly on the
+project cards.
+
+21
+00:01:24.200 --> 00:01:29.619
+Her findings become a scoped Codex prompt,
+ready to review alongside the captured
+screens.

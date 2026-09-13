@@ -1,17 +1,105 @@
 {
+  "recordedAt": "2026-09-13",
   "viewport": "1280x900",
-  "recording": "Continuous Playwright browser recording; no cuts or time compression; captions rendered live",
-  "externalServices": "Blocked; scripted navigation and analysis; in-app narration synthesis omitted",
+  "durationSeconds": 93.808,
+  "targetWebsite": "https://johan-vaz-site.vercel.app",
+  "task": "Find Johan's AI projects and inspect evidence of his work. Browse public pages only; do not contact anyone, submit forms, sign in, or make changes.",
+  "persona": "Ada / skeptical synthetic participant",
+  "recording": "Actual Chromium recordings of task entry and generation start, followed by the saved result from the same real API run. Generation waiting removed and labeled onscreen.",
+  "externalServices": {
+    "appGenerationCalls": 7,
+    "allHttpStatuses": 200,
+    "responses": {
+      "count": 6,
+      "model": "gpt-5.6-sol",
+      "purpose": "Four screenshot-based browser decisions, one narration script, and one advice response"
+    },
+    "speech": {
+      "count": 1,
+      "model": "gpt-4o-mini-tts",
+      "voice": "sage"
+    },
+    "fixtureProviderUsed": false
+  },
   "uiCalls": {
     "create": 1,
     "run": 1,
     "patch": 1,
     "sends": 0
   },
-  "browserErrors": [],
-  "screenshots": "Original local HTML fixture rendered in Chromium",
-  "appRevision": "See git history for the recording commit",
-  "postProduction": "Local synthetic explanatory narration and captions added; see narration.json. The embedded sample replay remains silent.",
-  "sha256": "728530fafc9c6ee8b1c8bc38072e038af58d0de2f570d42c829f5cffd6100a3d",
-  "sizeBytes": 2010129
+  "initialCaptureBrowserErrors": [],
+  "observedActions": [
+    "Scroll public portfolio",
+    "Open Equity Research Copilot Source link in a new tab",
+    "Open public Jo2234 profile",
+    "Scroll public profile"
+  ],
+  "replay": "Reconstructed from four actual browser screenshots and cursor positions, with AI-generated speech; not a continuous recording of the target browser.",
+  "replayTiming": {
+    "videoSeconds": 60.266667,
+    "audioSeconds": 60.36,
+    "method": "Visual duration measured from the already-generated narration and distributed over screenshot segments"
+  },
+  "savedResultRecapture": {
+    "additionalAppApiCalls": 0,
+    "reason": "Re-encoded the same screenshots and speech after fixing visual timing, then recorded complete normal UI playback"
+  },
+  "sourceRevisions": {
+    "base": "d51ae73868fbdb0d5094e10704fa167b7c5d5e0f",
+    "paidRun": "8feb69f596db8f97604c9fd85a6940f18938d7da",
+    "correctedReplay": "bd04dc1"
+  },
+  "verifiedFixes": [
+    "Follow newly opened browser tabs, including noopener links",
+    "Match visual replay duration to actual generated narration"
+  ],
+  "tests": {
+    "passed": 28,
+    "failed": 0,
+    "skipped": 0,
+    "includes": "Real Chromium egress enforcement, new-tab regression cases, ffmpeg narration/video duration and API/store tests"
+  },
+  "postProduction": {
+    "outerNarration": "Four locally generated Kokoro af_heart explanatory cues",
+    "nativeAppAudio": "Preserved in the final video",
+    "captions": {
+      "count": 21,
+      "outerNarrationCues": 4,
+      "nativeAdaSpeechCues": 17,
+      "nativeTimingMethod": "Whisper-1 timestamps reviewed against generated speech and captured output"
+    },
+    "videoPacketsUnchangedDuringNarrationMux": true,
+    "nativeSpeechIntervalSeconds": [
+      14.042,
+      74.402
+    ]
+  },
+  "limitations": [
+    "Single four-step AI persona session, not human usability research",
+    "Model observations and recommendations require review",
+    "Replay segments share the measured audio duration; narration is not aligned word-by-word to individual browser actions",
+    "GitHub delivery was not invoked"
+  ],
+  "artifacts": {
+    "product-demo.mp4": {
+      "sha256": "53543edd596b0515a3bf2a2a42a2a4fedca7c218c1927a98d2af4bf1d9f2a3c0",
+      "sizeBytes": 3821957
+    },
+    "sample-replay.mp4": {
+      "sha256": "33bb5c17da19cc9f365e17ec7812a9a4802f5b983d7ace41dd35a27f1e1611af",
+      "sizeBytes": 1070364
+    },
+    "product.png": {
+      "sha256": "70e37af78e50f3c739743fa03aaa3f059add374cf2981655ad7110faec0d5232",
+      "sizeBytes": 173082
+    },
+    "narration.vtt": {
+      "sha256": "652d29efeacdc61a82b073e9edb58101c0d904a9bd3f1efb83426165a807fe00",
+      "sizeBytes": 1844
+    },
+    "narration.json": {
+      "sha256": "126b34b8ba0097f32aa2082d7d39107bbba888540d4723cfb0c93037af756e49",
+      "sizeBytes": 5193
+    }
+  }
 }
